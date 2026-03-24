@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import load_json_yaml, now_utc_date, parse_frontmatter, write_text  # noqa: E402
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the standard Memory V3 closeout loop.")
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--task-type", required=True)
+    parser.add_argument("--input", action="append", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--branch", default="")
+    parser.add_argument("--date", default=now_utc_date())
+    parser.add_argument("--output-dir")
+    parser.add_argument("--title", default="")
+    parser.add_argument("--types", default="session,pattern,failure,decision")
+    parser.add_argument("--status", default="validated")
+    parser.add_argument("--project-note")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--approval-file")
+    parser.add_argument("--approve-all", action="store_true")
+    parser.add_argument("--approve-id", action="append", default=[])
+    parser.add_argument("--vault-wide-audit", action="store_true")
+    parser.add_argument("--fail-on-drift", action="store_true")
+    return parser.parse_args()
+
+
+def required_project_memory_issues(repo_root: Path) -> list[str]:
+    issues = []
+    contract = load_json_yaml(repo_root / ".project-memory/memory-contract.yaml")
+    authority = contract.get("state_authority", {})
+    current_state_path = repo_root / authority.get("repo_active_state_file", ".project-memory/canon/current-state.md")
+    verify_commands_path = repo_root / authority.get("repo_verification_file", ".project-memory/verify-commands.md")
+
+    if not current_state_path.exists():
+        issues.append(f"Missing active-state file: {current_state_path}")
+    else:
+        metadata, _ = parse_frontmatter(current_state_path.read_text(encoding="utf-8"))
+        required_fields = ["merged_baseline", "next_slice", "active_risks", "verification_reality", "authoritative_since"]
+        missing = [field for field in required_fields if field not in metadata]
+        if missing:
+            issues.append(f"Active-state file missing fields: {', '.join(missing)}")
+        for field in ("merged_baseline", "next_slice"):
+            value = str(metadata.get(field, "")).strip()
+            if not value or value == "set-this-after-install":
+                issues.append(f"Active-state field `{field}` still uses an install placeholder")
+
+    if not verify_commands_path.exists():
+        issues.append(f"Missing verification-command file: {verify_commands_path}")
+    else:
+        verify_text = verify_commands_path.read_text(encoding="utf-8")
+        if "Replace with exact" in verify_text or "Replace with the real" in verify_text:
+            issues.append("Verification commands still use install placeholders")
+
+    return issues
+
+
+def approval_tokens(manifest: dict) -> list[str]:
+    tokens = ["session"]
+    for key, singular in (("patterns", "pattern"), ("failures", "failure"), ("decisions", "decision")):
+        for item in manifest.get(key, []):
+            item_id = str(item.get("id", "")).strip()
+            title = str(item.get("title", "")).strip()
+            if item_id:
+                tokens.append(item_id)
+                tokens.append(f"{singular}:{item_id}")
+            if title:
+                tokens.append(f"{singular}:{title}")
+    return sorted(dict.fromkeys(tokens))
+
+
+def filter_manifest(manifest: dict, approved_ids: set[str]) -> dict:
+    filtered = dict(manifest)
+    filtered["session_capsule"] = manifest.get("session_capsule") if "session" in approved_ids else ""
+    filtered["patterns"] = [item for item in manifest.get("patterns", []) if str(item.get("id", "")).strip() in approved_ids]
+    filtered["failures"] = [item for item in manifest.get("failures", []) if str(item.get("id", "")).strip() in approved_ids]
+    filtered["decisions"] = [item for item in manifest.get("decisions", []) if str(item.get("id", "")).strip() in approved_ids]
+    return filtered
+
+
+def parse_review_checks(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    approved = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("- [x] ") or line.startswith("- [X] "):
+            approved.add(line.split("] ", 1)[1].strip())
+    return approved
+
+
+def render_review_file(manifest: dict, path: Path, preserved_checks: set[str]) -> None:
+    def mark(token: str) -> str:
+        return "x" if token in preserved_checks else " "
+
+    lines = [
+        "# Promotion Review",
+        "",
+        "- Check only the artifacts you want to promote.",
+        "- Leave an item unchecked to keep it as candidate-only knowledge.",
+        "- `session` controls whether the session capsule is promoted.",
+        "",
+        "## Session",
+        f"- [{mark('session')}] session",
+        f"  - Path: `{manifest.get('session_capsule', '')}`",
+        "",
+        "## Patterns",
+    ]
+
+    patterns = manifest.get("patterns", [])
+    if patterns:
+        for item in patterns:
+            token = str(item.get("id", "")).strip()
+            lines.extend(
+                [
+                    f"- [{mark(token)}] {token}",
+                    f"  - Title: {item.get('title', '')}",
+                ]
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Failures"])
+    failures = manifest.get("failures", [])
+    if failures:
+        for item in failures:
+            token = str(item.get("id", "")).strip()
+            lines.extend(
+                [
+                    f"- [{mark(token)}] {token}",
+                    f"  - Title: {item.get('title', '')}",
+                ]
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Decisions"])
+    decisions = manifest.get("decisions", [])
+    if decisions:
+        for item in decisions:
+            token = str(item.get("id", "")).strip()
+            lines.extend(
+                [
+                    f"- [{mark(token)}] {token}",
+                    f"  - Title: {item.get('title', '')}",
+                ]
+            )
+    else:
+        lines.append("- None")
+
+    write_text(path, "\n".join(lines))
+
+
+def run_command(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=str(cwd), text=True, capture_output=True, check=False)
+
+
+def append_stage(report: list[str], title: str, process: subprocess.CompletedProcess[str]) -> None:
+    report.extend(
+        [
+            "",
+            f"## {title}",
+            f"- Exit code: `{process.returncode}`",
+        ]
+    )
+    if process.stdout.strip():
+        report.extend(["", "### stdout", "", "```text", process.stdout.strip(), "```"])
+    if process.stderr.strip():
+        report.extend(["", "### stderr", "", "```text", process.stderr.strip(), "```"])
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    output_dir = Path(args.output_dir or repo_root / ".automation/workspace/memory-candidates" / args.task_id).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    issues = required_project_memory_issues(repo_root)
+    report_lines = [
+        "# Memory Closeout Report",
+        "",
+        f"- Project: `{args.project}`",
+        f"- Task: `{args.task_id}`",
+        f"- Task type: `{args.task_type}`",
+        f"- Apply mode: `{args.apply}`",
+        f"- Vault-wide audit: `{args.vault_wide_audit}`",
+    ]
+    if issues:
+        report_lines.extend(["", "## Validation Issues"] + [f"- {issue}" for issue in issues])
+        report_path = output_dir / "close-memory-loop-report.md"
+        write_text(report_path, "\n".join(report_lines))
+        print(json.dumps({"report": str(report_path), "validation_issues": issues}, ensure_ascii=False))
+        return 1
+
+    extract_command = [
+        str(repo_root / ".automation/scripts/extract-memory-candidates"),
+        "--project",
+        args.project,
+        "--task-id",
+        args.task_id,
+        "--task-type",
+        args.task_type,
+        "--repo-root",
+        str(repo_root),
+        "--date",
+        args.date,
+        "--output-dir",
+        str(output_dir),
+    ]
+    if args.branch:
+        extract_command.extend(["--branch", args.branch])
+    if args.title:
+        extract_command.extend(["--title", args.title])
+    for input_path in args.input:
+        extract_command.extend(["--input", input_path])
+    extract = run_command(extract_command, cwd=repo_root)
+    append_stage(report_lines, "Extract Candidates", extract)
+    if extract.returncode != 0:
+        report_path = output_dir / "close-memory-loop-report.md"
+        write_text(report_path, "\n".join(report_lines))
+        print(json.dumps({"report": str(report_path), "failed_stage": "extract"}, ensure_ascii=False))
+        return extract.returncode
+
+    extract_payload = json.loads(extract.stdout.strip().splitlines()[-1])
+    manifest_path = Path(extract_payload["manifest"]).resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    approval_file = Path(args.approval_file).expanduser().resolve() if args.approval_file else (manifest_path.parent / "promotion-review.md")
+    preserved_checks = parse_review_checks(approval_file)
+    render_review_file(manifest, approval_file, preserved_checks)
+    approved_manifest_path = manifest_path
+
+    if args.apply:
+        approved_tokens = set()
+        if args.approve_all:
+            approved_tokens = {"session"} | {
+                str(item.get("id", "")).strip()
+                for key in ("patterns", "failures", "decisions")
+                for item in manifest.get(key, [])
+                if str(item.get("id", "")).strip()
+            }
+        else:
+            approved_tokens |= {item.strip() for item in args.approve_id if item.strip()}
+            approved_tokens |= parse_review_checks(approval_file)
+
+        if not approved_tokens:
+            report_lines.extend(
+                [
+                    "",
+                    "## Approval Required",
+                    "- Apply mode requires an explicit promotion decision.",
+                    f"- Edit `{approval_file}` and check the artifacts to promote, or use `--approve-all`, or repeat `--approve-id` for specific candidate IDs.",
+                    "- Available approvals:",
+                ]
+                + [f"  - `{token}`" for token in approval_tokens(manifest)]
+            )
+            report_path = output_dir / "close-memory-loop-report.md"
+            write_text(report_path, "\n".join(report_lines))
+            print(json.dumps({"report": str(report_path), "manifest": str(manifest_path), "failed_stage": "approval-required"}, ensure_ascii=False))
+            return 1
+
+        if not args.approve_all:
+            filtered_manifest = filter_manifest(manifest, approved_tokens)
+            approved_manifest_path = manifest_path.parent / "approved-manifest.json"
+            write_text(approved_manifest_path, json.dumps(filtered_manifest, indent=2, ensure_ascii=False))
+
+    promote_command = [
+        str(repo_root / ".automation/scripts/promote-memory"),
+        "--manifest",
+        str(approved_manifest_path),
+        "--repo-root",
+        str(repo_root),
+        "--obsidian-root",
+        str(obsidian_root),
+        "--types",
+        args.types,
+        "--status",
+        args.status,
+    ]
+    if args.project_note:
+        promote_command.extend(["--project-note", args.project_note])
+    if args.apply:
+        promote_command.extend(["--apply", "--refresh-indexes", "--update-project-hub"])
+    promote = run_command(promote_command, cwd=repo_root)
+    append_stage(report_lines, "Promote Memory", promote)
+    if promote.returncode != 0:
+            report_path = output_dir / "close-memory-loop-report.md"
+            write_text(report_path, "\n".join(report_lines))
+            print(json.dumps({"report": str(report_path), "failed_stage": "promote", "manifest": str(approved_manifest_path)}, ensure_ascii=False))
+            return promote.returncode
+
+    project_local_audit_command = [
+        str(repo_root / ".automation/scripts/audit-memory"),
+        "--project",
+        args.project,
+        "--repo-root",
+        str(repo_root),
+        "--obsidian-root",
+        str(obsidian_root),
+        "--mode",
+        "project-local",
+        "--manifest",
+        str(approved_manifest_path),
+        "--fail-on-drift",
+    ]
+    project_local_audit = run_command(project_local_audit_command, cwd=repo_root)
+    append_stage(report_lines, "Project-Local Audit", project_local_audit)
+    if project_local_audit.returncode != 0:
+            report_path = output_dir / "close-memory-loop-report.md"
+            write_text(report_path, "\n".join(report_lines))
+            print(json.dumps({"report": str(report_path), "failed_stage": "project-local-audit", "manifest": str(approved_manifest_path)}, ensure_ascii=False))
+            return project_local_audit.returncode
+
+    vault_report_path = None
+    if args.vault_wide_audit:
+        vault_report_path = output_dir / "vault-wide-memory-audit.md"
+        vault_wide_audit_command = [
+            str(repo_root / ".automation/scripts/audit-memory"),
+            "--project",
+            args.project,
+            "--repo-root",
+            str(repo_root),
+            "--obsidian-root",
+            str(obsidian_root),
+            "--mode",
+            "vault-wide",
+            "--report",
+            str(vault_report_path),
+        ]
+        if args.fail_on_drift:
+            vault_wide_audit_command.append("--fail-on-drift")
+        vault_wide_audit = run_command(vault_wide_audit_command, cwd=repo_root)
+        append_stage(report_lines, "Vault-Wide Audit", vault_wide_audit)
+        if vault_wide_audit.returncode != 0:
+            report_path = output_dir / "close-memory-loop-report.md"
+            write_text(report_path, "\n".join(report_lines))
+            print(json.dumps({"report": str(report_path), "failed_stage": "vault-wide-audit", "manifest": str(approved_manifest_path)}, ensure_ascii=False))
+            return vault_wide_audit.returncode
+
+    report_path = output_dir / "close-memory-loop-report.md"
+    write_text(report_path, "\n".join(report_lines))
+    payload = {
+        "report": str(report_path),
+        "manifest": str(approved_manifest_path),
+        "project_local_audit": project_local_audit.stdout.strip().splitlines()[-1] if project_local_audit.stdout.strip() else "",
+        "vault_wide_audit": str(vault_report_path) if vault_report_path else "",
+    }
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

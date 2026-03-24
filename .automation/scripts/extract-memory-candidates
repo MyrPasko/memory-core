@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import (  # noqa: E402
+    detect_verification,
+    extract_decisions,
+    extract_issue_triplets,
+    extract_pattern_entries,
+    markdown_list,
+    now_utc_date,
+    render_template,
+    sanitize_filename,
+    slugify,
+    summary_from_text,
+    write_json,
+    write_text,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Extract candidate Memory V3 artifacts from session artifacts.")
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--task-type", required=True)
+    parser.add_argument("--input", action="append", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--branch", default="")
+    parser.add_argument("--date", default=now_utc_date())
+    parser.add_argument("--output-dir")
+    parser.add_argument("--title", default="")
+    return parser.parse_args()
+
+
+def changed_files(repo_root: Path) -> list[str]:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(repo_root), "status", "--short"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return []
+    files = []
+    for line in output.splitlines():
+        if len(line) > 3:
+            files.append(line[3:])
+    return files
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    output_dir = Path(args.output_dir or repo_root / ".automation/workspace/memory-candidates" / args.task_id)
+    template_root = repo_root / ".project-memory/templates/obsidian"
+
+    combined_parts = []
+    for input_path in args.input:
+        path = Path(input_path).resolve()
+        combined_parts.append(path.read_text(encoding="utf-8"))
+    combined_text = "\n\n".join(combined_parts)
+
+    summaries = summary_from_text(combined_text, limit=4)
+    verification = detect_verification(combined_text)
+    decisions = extract_decisions(combined_text)
+    failures = extract_issue_triplets(combined_text)
+    patterns = extract_pattern_entries(combined_text)
+    files_touched = changed_files(repo_root)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    patterns_dir = output_dir / "patterns"
+    failures_dir = output_dir / "failures"
+    decisions_dir = output_dir / "decisions"
+    patterns_dir.mkdir(exist_ok=True)
+    failures_dir.mkdir(exist_ok=True)
+    decisions_dir.mkdir(exist_ok=True)
+
+    created_patterns = []
+    created_failures = []
+    created_decisions = []
+
+    for entry in patterns:
+        title = entry["name"].strip()
+        note_id = f"pattern-{slugify(title)}"
+        content = render_template(
+            template_root / "pattern.md",
+            {
+                "id": note_id,
+                "status": "candidate",
+                "scope": "cross-project",
+                "projects_json": json.dumps([args.project], ensure_ascii=False),
+                "task_types_json": json.dumps([args.task_type], ensure_ascii=False),
+                "tags_json": json.dumps(sorted(set(slugify(title).split("-"))), ensure_ascii=False),
+                "last_verified_at": args.date,
+                "evidence_sessions_json": json.dumps([args.task_id], ensure_ascii=False),
+                "related_failures_json": json.dumps([], ensure_ascii=False),
+                "related_code_refs_json": json.dumps(files_touched[:2], ensure_ascii=False),
+                "title": title,
+                "problem": entry["solution"],
+                "when_to_use": entry["insight"],
+                "preferred_approach": entry["solution"],
+                "evidence": f"- Candidate extracted from `{args.task_id}`",
+            },
+        )
+        destination = patterns_dir / f"{sanitize_filename(title)}.md"
+        write_text(destination, content)
+        created_patterns.append({"title": title, "path": str(destination), "id": note_id})
+
+    for entry in failures:
+        title = entry["issue"][:80].rstrip(".")
+        note_id = f"failure-{slugify(title)}"
+        content = render_template(
+            template_root / "failure.md",
+            {
+                "id": note_id,
+                "status": "candidate",
+                "trigger": entry["issue"],
+                "symptoms_json": json.dumps([entry["issue"]], ensure_ascii=False),
+                "detection": entry["solution"],
+                "prevention": entry["prevention"],
+                "projects_json": json.dumps([args.project], ensure_ascii=False),
+                "last_seen_at": args.date,
+                "evidence_sessions_json": json.dumps([args.task_id], ensure_ascii=False),
+                "title": title,
+                "symptoms": markdown_list([entry["issue"]]),
+            },
+        )
+        destination = failures_dir / f"{sanitize_filename(title)}.md"
+        write_text(destination, content)
+        created_failures.append({"title": title, "path": str(destination), "id": note_id})
+
+    for entry in decisions:
+        title = entry["decision"][:80].rstrip(".")
+        note_id = f"decision-{slugify(title)}"
+        content = render_template(
+            template_root / "decision.md",
+            {
+                "id": note_id,
+                "status": "candidate",
+                "context": entry["rationale"] or "Context captured from session artifacts.",
+                "decision": entry["decision"],
+                "alternatives_json": json.dumps(entry["alternatives"], ensure_ascii=False),
+                "consequences_json": json.dumps(entry["consequences"], ensure_ascii=False),
+                "projects_json": json.dumps([args.project], ensure_ascii=False),
+                "last_seen_at": args.date,
+                "evidence_sessions_json": json.dumps([args.task_id], ensure_ascii=False),
+                "title": title,
+                "alternatives": markdown_list(entry["alternatives"]),
+                "consequences": markdown_list(entry["consequences"]),
+            },
+        )
+        destination = decisions_dir / f"{sanitize_filename(title)}.md"
+        write_text(destination, content)
+        created_decisions.append({"title": title, "path": str(destination), "id": note_id})
+
+    title = args.title or f"{args.task_id} session capsule"
+    session_capsule = render_template(
+        template_root / "session-capsule.md",
+        {
+            "id": args.task_id,
+            "project": args.project,
+            "status": "candidate",
+            "task_id": args.task_id,
+            "task_type": args.task_type,
+            "date": args.date,
+            "last_seen_at": args.date,
+            "repo": str(repo_root),
+            "branch": args.branch or "unknown",
+            "outcome": "candidate",
+            "verification_json": json.dumps(verification, ensure_ascii=False),
+            "files_touched_json": json.dumps(files_touched, ensure_ascii=False),
+            "related_patterns_json": json.dumps([item["title"] for item in created_patterns], ensure_ascii=False),
+            "related_failures_json": json.dumps([item["title"] for item in created_failures], ensure_ascii=False),
+            "related_decisions_json": json.dumps([item["title"] for item in created_decisions], ensure_ascii=False),
+            "next_retrieval_hints_json": json.dumps(summaries[:3], ensure_ascii=False),
+            "title": title,
+            "summary": markdown_list(summaries),
+            "decisions": markdown_list([item["title"] for item in created_decisions]),
+            "failures": markdown_list([item["title"] for item in created_failures]),
+            "reuse_signals": markdown_list([item["title"] for item in created_patterns]),
+            "next_hints": markdown_list(summaries[:3]),
+        },
+    )
+    session_path = output_dir / "session-capsule.md"
+    write_text(session_path, session_capsule)
+
+    manifest = {
+        "project": args.project,
+        "task_id": args.task_id,
+        "task_type": args.task_type,
+        "date": args.date,
+        "repo_root": str(repo_root),
+        "session_capsule": str(session_path),
+        "patterns": created_patterns,
+        "failures": created_failures,
+        "decisions": created_decisions,
+        "repo_canon_updates": [],
+        "verification": verification,
+    }
+    write_json(output_dir / "manifest.json", manifest)
+
+    report = "\n".join(
+        [
+            "# Memory Candidate Extraction",
+            "",
+            f"- Task: `{args.task_id}`",
+            f"- Session capsule: `{session_path}`",
+            f"- Pattern candidates: `{len(created_patterns)}`",
+            f"- Failure candidates: `{len(created_failures)}`",
+            f"- Decision candidates: `{len(created_decisions)}`",
+        ]
+    )
+    write_text(output_dir / "report.md", report)
+    print(json.dumps({"manifest": str(output_dir / "manifest.json"), "report": str(output_dir / "report.md")}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

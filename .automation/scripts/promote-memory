@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import (  # noqa: E402
+    find_project_note_path,
+    legacy_or_missing_project_hub,
+    load_json_yaml,
+    parse_frontmatter,
+    rebuild_indexes,
+    replace_frontmatter_values,
+    sanitize_filename,
+    write_text,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Promote candidate memory artifacts into Obsidian.")
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--status", default="validated")
+    parser.add_argument("--types", default="session,pattern,failure,decision")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--refresh-indexes", action="store_true")
+    parser.add_argument("--update-project-hub", action="store_true")
+    parser.add_argument("--project-note")
+    return parser.parse_args()
+
+
+def load_candidate_text(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def validate_candidate(kind: str, text: str, contract: dict) -> tuple[bool, str]:
+    lowered = text.lower()
+    rules = contract["promotion_rules"]
+    if kind == "pattern":
+        for phrase in rules["pattern"]["reject_if_contains"]:
+            if phrase in lowered:
+                return False, f"Rejected by phrase: {phrase}"
+        if "## when to use" not in lowered:
+            return False, "Missing reusable usage guidance"
+    if kind == "failure":
+        if "## prevention" not in lowered:
+            return False, "Missing prevention section"
+    if kind == "decision":
+        if "## alternatives" not in lowered:
+            return False, "Missing alternatives section"
+    return True, "ok"
+
+
+def destination_for(kind: str, obsidian_root: Path, source_path: Path, metadata: dict) -> Path:
+    if kind == "session":
+        date = str(metadata.get("date", "unknown")).replace("-", "")
+        return obsidian_root / "Sessions" / date / source_path.name
+    mapping = {
+        "pattern": obsidian_root / "Patterns",
+        "failure": obsidian_root / "Failures",
+        "decision": obsidian_root / "Decisions",
+    }
+    return mapping[kind] / sanitize_filename(source_path.name)
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    contract = load_json_yaml(repo_root / ".project-memory/memory-contract.yaml")
+    selected_types = {item.strip() for item in args.types.split(",") if item.strip()}
+
+    artifacts = []
+    if "session" in selected_types and manifest.get("session_capsule"):
+        artifacts.append(("session", manifest["session_capsule"]))
+    for key, singular in [("patterns", "pattern"), ("failures", "failure"), ("decisions", "decision")]:
+        if singular not in selected_types:
+            continue
+        for item in manifest[key]:
+            artifacts.append((singular, item["path"]))
+
+    promoted = []
+    rejected = []
+    conflicts = []
+
+    for kind, source in artifacts:
+        source_path = Path(source)
+        text = load_candidate_text(source)
+        metadata, _ = parse_frontmatter(text)
+        text = replace_frontmatter_values(text, {"status": args.status})
+        metadata, _ = parse_frontmatter(text)
+
+        ok, reason = validate_candidate(kind, text, contract)
+        destination = destination_for(kind, obsidian_root, source_path, metadata)
+        if not ok:
+            rejected.append({"kind": kind, "source": source, "reason": reason})
+            continue
+        if destination.exists() and not args.apply:
+            conflicts.append({"kind": kind, "destination": str(destination)})
+            continue
+        promoted.append({"kind": kind, "source": source, "destination": str(destination)})
+        if args.apply:
+            write_text(destination, text)
+
+    refreshed = {}
+    if args.apply and args.refresh_indexes:
+        refreshed = {name: str(path) for name, path in rebuild_indexes(obsidian_root).items()}
+
+    project_hub_status = "not-requested"
+    if args.apply and args.update_project_hub:
+        project_name = manifest["project"]
+        project_note = (
+            Path(args.project_note)
+            if args.project_note
+            else find_project_note_path(obsidian_root, project_name)
+        )
+        previous_state = "created-v2" if legacy_or_missing_project_hub(project_note) else "updated"
+        rebuild = subprocess.run(
+            [
+                str(repo_root / ".automation/scripts/rebuild-project-hub"),
+                "--project",
+                project_name,
+                "--repo-root",
+                str(repo_root),
+                "--obsidian-root",
+                str(obsidian_root),
+                "--project-note",
+                str(project_note),
+            ],
+            cwd=str(repo_root),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if rebuild.returncode != 0:
+            raise SystemExit(rebuild.stderr.strip() or "Failed to rebuild project hub")
+        project_hub_status = previous_state
+
+    report_lines = [
+        "# Memory Promotion Report",
+        "",
+        f"- Manifest: `{manifest_path}`",
+        f"- Apply mode: `{args.apply}`",
+        f"- Promoted: `{len(promoted)}`",
+        f"- Rejected: `{len(rejected)}`",
+        f"- Conflicts: `{len(conflicts)}`",
+        f"- Project hub: `{project_hub_status}`",
+    ]
+    if refreshed:
+        report_lines.extend(["", "## Refreshed Indexes"] + [f"- `{path}`" for path in refreshed.values()])
+    if rejected:
+        report_lines.extend(["", "## Rejected"] + [f"- `{item['kind']}`: {item['reason']}" for item in rejected])
+    if conflicts:
+        report_lines.extend(["", "## Conflicts"] + [f"- `{item['kind']}`: `{item['destination']}`" for item in conflicts])
+
+    report_path = manifest_path.parent / "promotion-report.md"
+    write_text(report_path, "\n".join(report_lines))
+    print(json.dumps({"report": str(report_path), "promoted": promoted, "rejected": rejected, "conflicts": conflicts}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

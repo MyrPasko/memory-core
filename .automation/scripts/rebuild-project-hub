@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import build_project_hub_text_for_project, find_project_note_path, write_text  # noqa: E402
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Rebuild the generated Obsidian project hub from repo and vault state.")
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--project-note")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    current_state_path = repo_root / ".project-memory/canon/current-state.md"
+    project_note = Path(args.project_note).expanduser().resolve() if args.project_note else find_project_note_path(obsidian_root, args.project)
+    project_note.parent.mkdir(parents=True, exist_ok=True)
+
+    text = build_project_hub_text_for_project(
+        template_path=repo_root / ".project-memory/templates/obsidian/project-hub-summary.md",
+        obsidian_root=obsidian_root,
+        project=args.project,
+        repo_path=str(repo_root),
+        repo_canon_path=str(current_state_path),
+    )
+    write_text(project_note, text)
+    print(project_note)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

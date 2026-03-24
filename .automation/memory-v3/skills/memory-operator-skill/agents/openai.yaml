@@ -1,0 +1,4 @@
+interface:
+  display_name: "Memory Operator"
+  short_description: "Run Memory V3 through ./.automation/scripts/aira-memory"
+  default_prompt: "Use $memory-operator-skill to operate Memory V3 through the ./.automation/scripts/aira-memory wrapper."

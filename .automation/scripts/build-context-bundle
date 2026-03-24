@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import (  # noqa: E402
+    choose_notes,
+    excerpt,
+    find_code_examples,
+    format_note_entry,
+    load_json_yaml,
+    now_utc_date,
+    parse_frontmatter,
+    query_matches_signals,
+    render_selected_doc,
+    write_json,
+    write_text,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build a Memory V3 context bundle.")
+    parser.add_argument("--task-type", required=True)
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--output")
+    parser.add_argument("--manifest")
+    parser.add_argument("--token-budget", type=int)
+    return parser.parse_args()
+
+
+def derive_project_keys(repo_root: Path) -> set[str]:
+    keys = {repo_root.name}
+    current_state_path = repo_root / ".project-memory/canon/current-state.md"
+    if current_state_path.exists():
+        metadata, _ = parse_frontmatter(current_state_path.read_text(encoding="utf-8"))
+        for field in ("project_id", "project"):
+            value = metadata.get(field)
+            if value:
+                keys.add(str(value))
+    return {key.strip() for key in keys if str(key).strip()}
+
+
+def normalize_obsidian_config(raw: dict) -> tuple[dict[str, int], dict]:
+    if raw and all(isinstance(value, int) for value in raw.values()):
+        return raw, {
+            "prefer_project_match": True,
+            "allowed_statuses": ["validated"],
+            "cross_project_fallback": True,
+        }
+
+    limits = {key: int(value) for key, value in raw.get("limits", {}).items()}
+    options = {
+        "prefer_project_match": bool(raw.get("prefer_project_match", True)),
+        "allowed_statuses": raw.get("allowed_statuses", ["validated"]),
+        "cross_project_fallback": bool(raw.get("cross_project_fallback", True)),
+    }
+    return limits, options
+
+
+def normalize_code_example_config(raw) -> dict:
+    if isinstance(raw, int):
+        return {
+            "limit": raw,
+            "include_paths": [],
+            "exclude_paths": [],
+            "allowed_extensions": [],
+        }
+    return {
+        "limit": int(raw.get("limit", 0)),
+        "include_paths": raw.get("include_paths", []),
+        "exclude_paths": raw.get("exclude_paths", []),
+        "allowed_extensions": raw.get("allowed_extensions", []),
+    }
+
+
+def take_block(text: str, remaining_budget: int, *, min_chars: int = 120) -> tuple[str, int]:
+    if remaining_budget <= 0:
+        return "", 0
+    if len(text) <= remaining_budget:
+        return text, remaining_budget - len(text)
+    if remaining_budget < min_chars:
+        return "", remaining_budget
+    return excerpt(text, max_chars=remaining_budget), 0
+
+
+def default_bundle_budgets(token_budget: int) -> dict[str, int]:
+    char_budget = token_budget * 4
+    return {
+        "root_bootstrap": min(1100, char_budget // 6),
+        "always_load_repo": max(1500, char_budget // 4),
+        "conditional_repo": max(900, char_budget // 8),
+        "playbook": min(1600, char_budget // 5),
+        "obsidian_total": max(1600, char_budget // 3),
+        "obsidian_entry": 900,
+        "code_examples_entry": 420,
+        "code_examples_total": max(700, char_budget // 6),
+    }
+
+
+def format_code_example_entry(example: dict, max_chars: int) -> str:
+    return (
+        f"### `{example['path']}`\n"
+        f"- Score: {example['score']:.1f}\n\n"
+        f"```text\n{excerpt(example['snippet'], max_chars=max_chars)}\n```\n"
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    retrieval_map = load_json_yaml(repo_root / ".project-memory/retrieval-map.yaml")
+    task_config = retrieval_map["task_types"].get(args.task_type)
+    if task_config is None:
+        raise SystemExit(f"Unknown task type: {args.task_type}")
+
+    output_path = Path(args.output or (repo_root / retrieval_map["default_output"]))
+    manifest_path = Path(args.manifest or (repo_root / retrieval_map["default_manifest"]))
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    token_budget = args.token_budget or retrieval_map["default_token_budget"]
+    root_bootstrap_path = repo_root / retrieval_map["root_bootstrap"]
+    project_keys = derive_project_keys(repo_root)
+    bundle_budgets = default_bundle_budgets(token_budget)
+    bundle_budgets.update(task_config.get("bundle_budgets", {}))
+
+    repo_sections = []
+    for item in task_config.get("always_load", []):
+        path = repo_root / item["path"]
+        repo_sections.append(
+            {
+                "path": str(path),
+                "content": render_selected_doc(
+                    path,
+                    sections=item.get("sections"),
+                    frontmatter_fields=item.get("frontmatter_fields"),
+                    max_chars=item.get("max_chars", 800),
+                ),
+                "mode": "always_load",
+            }
+        )
+
+    conditional_sections = []
+    for item in task_config.get("load_if_missing_signal", []):
+        if not query_matches_signals(args.query, item.get("signals", [])):
+            continue
+        path = repo_root / item["path"]
+        rendered = render_selected_doc(
+            path,
+            sections=item.get("sections"),
+            frontmatter_fields=item.get("frontmatter_fields"),
+            max_chars=item.get("max_chars", 800),
+        )
+        conditional_sections.append(
+            {
+                "path": str(path),
+                "content": rendered,
+                "mode": "load_if_missing_signal",
+                "signals": item.get("signals", []),
+            }
+        )
+
+    playbook_path = repo_root / task_config["playbook"]
+    playbook = playbook_path.read_text(encoding="utf-8").strip()
+
+    obsidian_limits, obsidian_options = normalize_obsidian_config(task_config["task_specific"]["obsidian"])
+    selected_notes = {}
+    for note_type, limit in obsidian_limits.items():
+        selected_notes[note_type] = choose_notes(
+            obsidian_root,
+            note_type,
+            args.query,
+            limit,
+            project_keys=project_keys,
+            allowed_statuses={str(item).lower() for item in obsidian_options["allowed_statuses"]},
+            prefer_project_match=obsidian_options["prefer_project_match"],
+            cross_project_fallback=obsidian_options["cross_project_fallback"],
+        )
+
+    code_example_config = normalize_code_example_config(task_config["task_specific"]["code_examples"])
+    code_examples = find_code_examples(
+        repo_root,
+        args.query,
+        code_example_config["limit"],
+        include_paths=code_example_config["include_paths"],
+        exclude_paths=code_example_config["exclude_paths"],
+        allowed_extensions=code_example_config["allowed_extensions"],
+    )
+
+    root_bootstrap = excerpt(
+        root_bootstrap_path.read_text(encoding="utf-8"),
+        max_chars=bundle_budgets["root_bootstrap"],
+    )
+
+    sections = [
+        "# Context Bundle",
+        "",
+        f"- Date: {now_utc_date()}",
+        f"- Task type: `{args.task_type}`",
+        f"- Query: `{args.query}`",
+        f"- Token budget target: `{token_budget}`",
+        "",
+        "## Root Bootstrap",
+        "",
+        root_bootstrap,
+        "",
+    ]
+
+    always_budget = int(bundle_budgets["always_load_repo"])
+    always_blocks = []
+    for item in repo_sections:
+        block, always_budget = take_block(item["content"], always_budget)
+        if block:
+            always_blocks.append(block)
+
+    sections.extend(["## Always-Load Repo Context", ""])
+    if always_blocks:
+        for block in always_blocks:
+            sections.extend([block, ""])
+    else:
+        sections.append("No always-load repo context fit the budget.\n")
+
+    if conditional_sections:
+        conditional_budget = int(bundle_budgets["conditional_repo"])
+        conditional_blocks = []
+        for item in conditional_sections:
+            block, conditional_budget = take_block(item["content"], conditional_budget)
+            if block:
+                conditional_blocks.append(block)
+        if conditional_blocks:
+            sections.extend(["## Conditional Repo Context", ""])
+            for block in conditional_blocks:
+                sections.extend([block, ""])
+
+    sections.extend(
+        [
+            "## Playbook",
+            "",
+            excerpt(playbook, max_chars=int(bundle_budgets["playbook"])),
+            "",
+        ]
+    )
+
+    notes_budget = int(bundle_budgets["obsidian_total"])
+    for note_type, notes in selected_notes.items():
+        note_blocks = []
+        if not notes:
+            sections.extend([f"## Retrieved {note_type}", "", "No relevant notes found.\n"])
+            continue
+        for note in notes:
+            block, notes_budget = take_block(
+                format_note_entry(note, max_chars=int(bundle_budgets["obsidian_entry"])),
+                notes_budget,
+            )
+            if block:
+                note_blocks.append(block)
+        sections.extend([f"## Retrieved {note_type}", ""])
+        if note_blocks:
+            for block in note_blocks:
+                sections.extend([block, ""])
+        else:
+            sections.append("No relevant notes fit the budget.\n")
+
+    code_budget = int(bundle_budgets["code_examples_total"])
+    code_blocks = []
+    for example in code_examples:
+        block = format_code_example_entry(example, max_chars=int(bundle_budgets["code_examples_entry"]))
+        if len(block) > code_budget:
+            continue
+        code_budget -= len(block)
+        code_blocks.append(block)
+    sections.extend(["## Live Code Examples", ""])
+    if code_blocks:
+        for block in code_blocks:
+            sections.extend([block, ""])
+    else:
+        sections.append("No code examples fit the budget.\n")
+
+    bundle_text = "\n".join(sections).strip() + "\n"
+
+    manifest = {
+        "generated_at": now_utc_date(),
+        "task_type": args.task_type,
+        "query": args.query,
+        "root_bootstrap": str(root_bootstrap_path),
+        "project_keys": sorted(project_keys),
+        "always_load": [item["path"] for item in repo_sections],
+        "conditional_load": [item["path"] for item in conditional_sections],
+        "playbook": str(playbook_path),
+        "notes": {
+            note_type: [str(note.path) for note in notes]
+            for note_type, notes in selected_notes.items()
+        },
+        "note_details": {
+            note_type: [
+                {
+                    "path": str(note.path),
+                    "scope": note.retrieval_scope,
+                    "status": note.retrieval_status,
+                    "score": note.score,
+                }
+                for note in notes
+            ]
+            for note_type, notes in selected_notes.items()
+        },
+        "code_examples": code_examples,
+        "bundle_budgets": bundle_budgets,
+        "bundle_path": str(output_path),
+    }
+
+    write_text(output_path, bundle_text)
+    write_json(manifest_path, manifest)
+    print(json.dumps({"bundle": str(output_path), "manifest": str(manifest_path)}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

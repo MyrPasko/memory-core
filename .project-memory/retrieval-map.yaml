@@ -1,0 +1,335 @@
+{
+  "version": "3",
+  "default_output": ".automation/workspace/context-bundle.md",
+  "default_manifest": ".automation/workspace/context-bundle.json",
+  "default_token_budget": 8000,
+  "root_bootstrap": "AGENTS.md",
+  "task_types": {
+    "feature": {
+      "playbook": ".project-memory/playbooks/feature.md",
+      "bundle_budgets": {
+        "root_bootstrap": 950,
+        "always_load_repo": 2400,
+        "conditional_repo": 1100,
+        "playbook": 1200,
+        "obsidian_total": 2600,
+        "obsidian_entry": 780,
+        "code_examples_total": 900
+      },
+      "always_load": [
+        {
+          "path": ".project-memory/canon/constraints.md",
+          "sections": ["process", "memory v3", "ownership"],
+          "max_chars": 900
+        },
+        {
+          "path": ".project-memory/canon/current-state.md",
+          "sections": ["merged baseline", "next slice", "active risks", "verification reality"],
+          "frontmatter_fields": ["merged_baseline", "next_slice", "verification_reality"],
+          "max_chars": 1000
+        }
+      ],
+      "load_if_missing_signal": [
+        {
+          "path": ".project-memory/canon/repo-landmines.md",
+          "sections": ["critical landmines", "do not infer from code alone"],
+          "signals": ["migration", "legacy", "generator", "flaky", "risky", "side effect"],
+          "max_chars": 700
+        },
+        {
+          "path": ".project-memory/docs-index.md",
+          "sections": ["framework docs", "local docs"],
+          "signals": ["angular", "ionic", "capacitor", "express", "typescript", "builder", "framework"],
+          "max_chars": 650
+        },
+        {
+          "path": ".project-memory/verify-commands.md",
+          "sections": ["frontend", "backend", "notes"],
+          "signals": ["verify", "test", "build", "lint", "typecheck", "run"],
+          "max_chars": 500
+        }
+      ],
+      "task_specific": {
+        "obsidian": {
+          "limits": {
+            "Patterns": 3,
+            "Failures": 1,
+            "Sessions": 1
+          },
+          "prefer_project_match": true,
+          "allowed_statuses": ["validated"],
+          "cross_project_fallback": true
+        },
+        "code_examples": {
+          "limit": 2,
+          "exclude_paths": [
+            ".project-memory/**",
+            ".automation/**",
+            "output/**",
+            "AGENTS.md"
+          ],
+          "allowed_extensions": [".ts", ".tsx", ".js", ".jsx", ".py", ".sh"]
+        }
+      }
+    },
+    "bugfix": {
+      "playbook": ".project-memory/playbooks/bugfix.md",
+      "bundle_budgets": {
+        "root_bootstrap": 900,
+        "always_load_repo": 2200,
+        "conditional_repo": 1200,
+        "playbook": 1100,
+        "obsidian_total": 2400,
+        "obsidian_entry": 760,
+        "code_examples_total": 900
+      },
+      "always_load": [
+        {
+          "path": ".project-memory/canon/current-state.md",
+          "sections": ["active risks", "verification reality"],
+          "frontmatter_fields": ["merged_baseline", "active_risks", "verification_reality"],
+          "max_chars": 1000
+        },
+        {
+          "path": ".project-memory/canon/constraints.md",
+          "sections": ["process", "memory v3", "ownership"],
+          "max_chars": 850
+        }
+      ],
+      "load_if_missing_signal": [
+        {
+          "path": ".project-memory/canon/repo-landmines.md",
+          "sections": ["critical landmines", "do not infer from code alone"],
+          "signals": ["legacy", "flaky", "generator", "migration", "state", "regression"],
+          "max_chars": 800
+        },
+        {
+          "path": ".project-memory/verify-commands.md",
+          "sections": ["frontend", "backend", "notes"],
+          "signals": ["verify", "test", "build", "lint", "typecheck", "regression"],
+          "max_chars": 550
+        }
+      ],
+      "task_specific": {
+        "obsidian": {
+          "limits": {
+            "Failures": 2,
+            "Sessions": 1,
+            "Patterns": 1
+          },
+          "prefer_project_match": true,
+          "allowed_statuses": ["validated"],
+          "cross_project_fallback": true
+        },
+        "code_examples": {
+          "limit": 2,
+          "exclude_paths": [
+            ".project-memory/**",
+            ".automation/**",
+            "output/**",
+            "AGENTS.md"
+          ],
+          "allowed_extensions": [".ts", ".tsx", ".js", ".jsx", ".py", ".sh"]
+        }
+      }
+    },
+    "infra": {
+      "playbook": ".project-memory/playbooks/infra.md",
+      "bundle_budgets": {
+        "root_bootstrap": 900,
+        "always_load_repo": 2200,
+        "conditional_repo": 1200,
+        "playbook": 1100,
+        "obsidian_total": 2200,
+        "obsidian_entry": 720,
+        "code_examples_total": 1200
+      },
+      "always_load": [
+        {
+          "path": ".project-memory/canon/constraints.md",
+          "sections": ["process", "memory v3", "ownership"],
+          "max_chars": 900
+        },
+        {
+          "path": ".project-memory/canon/workflow.md",
+          "sections": ["controller / worker loop", "gates"],
+          "max_chars": 850
+        }
+      ],
+      "load_if_missing_signal": [
+        {
+          "path": ".project-memory/canon/current-state.md",
+          "sections": ["active risks", "verification reality"],
+          "frontmatter_fields": ["merged_baseline", "active_risks"],
+          "signals": ["verification", "drift", "automation", "runner", "workflow"],
+          "max_chars": 900
+        },
+        {
+          "path": ".project-memory/canon/repo-landmines.md",
+          "sections": ["critical landmines", "do not infer from code alone"],
+          "signals": ["legacy", "automation", "worker", "controller", "drift", "skill"],
+          "max_chars": 700
+        },
+        {
+          "path": ".project-memory/docs-index.md",
+          "sections": ["local docs"],
+          "signals": ["workflow", "architecture", "verify", "docs"],
+          "max_chars": 450
+        }
+      ],
+      "task_specific": {
+        "obsidian": {
+          "limits": {
+            "Patterns": 2,
+            "Failures": 2,
+            "Decisions": 1,
+            "Sessions": 1
+          },
+          "prefer_project_match": true,
+          "allowed_statuses": ["validated"],
+          "cross_project_fallback": true
+        },
+        "code_examples": {
+          "limit": 1,
+          "include_paths": [
+            ".automation/scripts/**",
+            "docs/process/**",
+            "docs/architecture/**"
+          ],
+          "exclude_paths": [
+            ".project-memory/**",
+            ".automation/workspace/**",
+            "output/**",
+            "AGENTS.md"
+          ],
+          "allowed_extensions": [".py", ".sh", ".md", ".yaml", ".yml", ".json"]
+        }
+      }
+    },
+    "review-closeout": {
+      "playbook": ".project-memory/playbooks/review-closeout.md",
+      "bundle_budgets": {
+        "root_bootstrap": 900,
+        "always_load_repo": 2200,
+        "conditional_repo": 1100,
+        "playbook": 1100,
+        "obsidian_total": 2200,
+        "obsidian_entry": 720,
+        "code_examples_total": 900
+      },
+      "always_load": [
+        {
+          "path": ".project-memory/canon/workflow.md",
+          "sections": ["controller / worker loop", "gates"],
+          "max_chars": 850
+        },
+        {
+          "path": ".project-memory/canon/constraints.md",
+          "sections": ["process", "memory v3", "ownership"],
+          "max_chars": 850
+        }
+      ],
+      "load_if_missing_signal": [
+        {
+          "path": ".project-memory/canon/current-state.md",
+          "sections": ["merged baseline", "active risks", "verification reality"],
+          "frontmatter_fields": ["merged_baseline", "verification_reality"],
+          "signals": ["merge-ready", "review", "verification", "closeout", "sync"],
+          "max_chars": 1000
+        },
+        {
+          "path": ".project-memory/verify-commands.md",
+          "sections": ["frontend", "backend", "notes"],
+          "signals": ["verify", "review", "closeout", "build", "test"],
+          "max_chars": 550
+        }
+      ],
+      "task_specific": {
+        "obsidian": {
+          "limits": {
+            "Failures": 2,
+            "Decisions": 2,
+            "Sessions": 1
+          },
+          "prefer_project_match": true,
+          "allowed_statuses": ["validated"],
+          "cross_project_fallback": true
+        },
+        "code_examples": {
+          "limit": 1,
+          "include_paths": [
+            "docs/process/**"
+          ],
+          "exclude_paths": [
+            ".project-memory/**",
+            ".automation/**",
+            "output/**",
+            "AGENTS.md"
+          ],
+          "allowed_extensions": [".md"]
+        }
+      }
+    },
+    "investigation": {
+      "playbook": ".project-memory/playbooks/investigation.md",
+      "bundle_budgets": {
+        "root_bootstrap": 950,
+        "always_load_repo": 2200,
+        "conditional_repo": 1200,
+        "playbook": 1100,
+        "obsidian_total": 2600,
+        "obsidian_entry": 780,
+        "code_examples_total": 1000
+      },
+      "always_load": [
+        {
+          "path": ".project-memory/canon/current-state.md",
+          "sections": ["active risks", "verification reality"],
+          "frontmatter_fields": ["merged_baseline", "active_risks", "verification_reality"],
+          "max_chars": 1000
+        },
+        {
+          "path": ".project-memory/canon/constraints.md",
+          "sections": ["process", "memory v3", "ownership"],
+          "max_chars": 850
+        }
+      ],
+      "load_if_missing_signal": [
+        {
+          "path": ".project-memory/canon/repo-landmines.md",
+          "sections": ["critical landmines", "do not infer from code alone"],
+          "signals": ["legacy", "migration", "flaky", "regression", "generator", "investigate"],
+          "max_chars": 800
+        },
+        {
+          "path": ".project-memory/docs-index.md",
+          "sections": ["framework docs", "local docs"],
+          "signals": ["angular", "ionic", "capacitor", "express", "workflow", "docs"],
+          "max_chars": 650
+        }
+      ],
+      "task_specific": {
+        "obsidian": {
+          "limits": {
+            "Failures": 2,
+            "Decisions": 1,
+            "Sessions": 2
+          },
+          "prefer_project_match": true,
+          "allowed_statuses": ["validated"],
+          "cross_project_fallback": true
+        },
+        "code_examples": {
+          "limit": 2,
+          "exclude_paths": [
+            ".project-memory/**",
+            ".automation/**",
+            "output/**",
+            "AGENTS.md"
+          ],
+          "allowed_extensions": [".ts", ".tsx", ".js", ".jsx", ".py", ".sh"]
+        }
+      }
+    }
+  }
+}

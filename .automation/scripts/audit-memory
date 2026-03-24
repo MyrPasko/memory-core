@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import (  # noqa: E402
+    collect_notes,
+    file_has_discoverable_commands,
+    file_is_prose_heavy,
+    find_project_note_path,
+    legacy_or_missing_project_hub,
+    load_json_yaml,
+    normalize_project_keys,
+    note_matches_project,
+    note_status,
+    parse_frontmatter,
+    write_text,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Audit Memory V3 drift, duplicates, and stale notes.")
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--project-note")
+    parser.add_argument("--mode", choices=["project-local", "vault-wide"], default="project-local")
+    parser.add_argument("--manifest")
+    parser.add_argument("--fail-on-drift", action="store_true")
+    parser.add_argument("--report")
+    return parser.parse_args()
+
+
+def selected_note_paths(manifest_path: str | None) -> set[str]:
+    if not manifest_path:
+        return set()
+    path = Path(manifest_path).expanduser().resolve()
+    if not path.exists():
+        return set()
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    selected = set()
+    for paths in manifest.get("notes", {}).values():
+        selected.update(str(Path(item).resolve()) for item in paths)
+    return selected
+
+
+def state_authority_values(repo_root: Path, contract: dict) -> dict[str, str]:
+    authority = contract.get("state_authority", {})
+    current_state_path = repo_root / authority.get("repo_active_state_file", ".project-memory/canon/current-state.md")
+    if not current_state_path.exists():
+        return {}
+    metadata, _ = parse_frontmatter(current_state_path.read_text(encoding="utf-8"))
+    values = {
+        "merged_baseline": str(metadata.get("merged_baseline", "")).strip(),
+        "next_slice": str(metadata.get("next_slice", "")).strip(),
+    }
+    for field in ("active_risks", "verification_reality"):
+        raw = metadata.get(field, [])
+        if isinstance(raw, list):
+            for index, item in enumerate(raw, start=1):
+                values[f"{field}[{index}]"] = str(item).strip()
+    return values
+
+
+def state_authority_headings(contract: dict) -> list[str]:
+    authority = contract.get("state_authority", {})
+    return [str(item).lower() for item in authority.get("forbidden_active_state_headings", [])]
+
+
+def find_forbidden_headings(path: Path, text: str, headings: list[str]) -> list[str]:
+    lowered = text.lower()
+    issues = []
+    for heading in headings:
+        if heading and heading in lowered:
+            issues.append(f"{path} contains forbidden active-state heading `{heading}` outside repo project memory")
+    return issues
+
+
+def find_marker_duplication(path: Path, text: str, markers: dict[str, str]) -> list[str]:
+    lowered = text.lower()
+    issues = []
+    for label, value in markers.items():
+        if value and value.lower() in lowered:
+            issues.append(f"{path} duplicates `{label}` value `{value}` from repo project memory")
+    return issues
+
+
+def project_hub_state_authority_issues(project_note: Path, contract: dict, markers: dict[str, str]) -> list[str]:
+    if not project_note.exists():
+        return []
+    _, body = parse_frontmatter(project_note.read_text(encoding="utf-8"))
+    issues = find_forbidden_headings(project_note, body, state_authority_headings(contract))
+    issues.extend(find_marker_duplication(project_note, body, markers))
+    return issues
+
+
+def pointer_doc_state_authority_issues(repo_root: Path, contract: dict, markers: dict[str, str]) -> list[str]:
+    authority = contract.get("state_authority", {})
+    issues = []
+    pointer_docs = [repo_root / path for path in authority.get("pointer_only_docs", [])]
+    headings = state_authority_headings(contract)
+
+    for path in pointer_docs:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        issues.extend(find_forbidden_headings(path, text, headings))
+        if path.name != "AGENTS.md":
+            issues.extend(find_marker_duplication(path, text, markers))
+    return issues
+
+
+def project_memory_placeholder_issues(repo_root: Path, contract: dict) -> list[str]:
+    authority = contract.get("state_authority", {})
+    issues = []
+    current_state_path = repo_root / authority.get("repo_active_state_file", ".project-memory/canon/current-state.md")
+    verify_commands_path = repo_root / authority.get("repo_verification_file", ".project-memory/verify-commands.md")
+
+    if current_state_path.exists():
+        metadata, body = parse_frontmatter(current_state_path.read_text(encoding="utf-8"))
+        for field in ("merged_baseline", "next_slice"):
+            value = str(metadata.get(field, "")).strip()
+            if not value or value == "set-this-after-install":
+                issues.append(f"{current_state_path} still contains install placeholder for `{field}`")
+        if "Replace with the real" in body:
+            issues.append(f"{current_state_path} still contains install placeholder prose")
+
+    if verify_commands_path.exists():
+        verify_text = verify_commands_path.read_text(encoding="utf-8")
+        if "Replace with exact" in verify_text or "Replace with the real" in verify_text:
+            issues.append(f"{verify_commands_path} still contains install placeholder prose")
+
+    return issues
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    contract = load_json_yaml(repo_root / ".project-memory/memory-contract.yaml")
+    stale_days = int(contract["drift_rules"]["stale_threshold_days"])
+    allow_missing_project_hub = bool(contract["drift_rules"].get("allow_missing_project_hub_in_project_local_mode", True))
+    project_keys = normalize_project_keys([args.project, repo_root.name])
+    selected_paths = selected_note_paths(args.manifest)
+    project_note = (
+        Path(args.project_note)
+        if args.project_note
+        else find_project_note_path(obsidian_root, args.project)
+    )
+
+    duplicates = []
+    stale = []
+    missing_metadata = []
+    context_hygiene = []
+    state_authority = []
+    ids = defaultdict(list)
+    note_types = ["Patterns", "Failures", "Decisions"]
+    if args.mode == "project-local" or selected_paths:
+        note_types.append("Sessions")
+
+    for note_type in note_types:
+        for note in collect_notes(obsidian_root, note_type):
+            note_path = str(note.path.resolve())
+            note_id = str(note.metadata.get("id", "")).strip()
+            status = note_status(note)
+            selected_by_manifest = note_path in selected_paths
+            relevant_to_project = note_matches_project(note, project_keys)
+            include_for_project = selected_by_manifest or relevant_to_project
+
+            if args.mode == "vault-wide":
+                if not note_id or not status:
+                    missing_metadata.append(note_path)
+                if note_id:
+                    ids[note_id].append(note_path)
+            else:
+                if selected_by_manifest and (not note_id or not status):
+                    missing_metadata.append(note_path)
+                if note_id and include_for_project:
+                    ids[note_id].append(note_path)
+
+            if status == "validated" and (args.mode == "vault-wide" or include_for_project):
+                last_verified_at = str(note.metadata.get("last_verified_at") or note.metadata.get("last_seen_at") or "")
+                if not last_verified_at:
+                    stale.append(f"{note.path} missing verification date")
+                    continue
+                try:
+                    days = (datetime.now(timezone.utc).date() - datetime.strptime(last_verified_at, "%Y-%m-%d").date()).days
+                except ValueError:
+                    stale.append(f"{note.path} invalid verification date `{last_verified_at}`")
+                    continue
+                if days > stale_days:
+                    stale.append(f"{note.path} stale for {days} days")
+
+    for note_id, paths in ids.items():
+        if len(paths) > 1:
+            duplicates.append((note_id, paths))
+
+    drift = []
+    authority_markers = state_authority_values(repo_root, contract)
+    if not project_note.exists():
+        if args.mode == "vault-wide" or not allow_missing_project_hub:
+            drift.append(f"Missing project hub: {project_note}")
+    elif legacy_or_missing_project_hub(project_note):
+        drift.append(f"Legacy or non-V2 project hub: {project_note}")
+    else:
+        metadata, _ = parse_frontmatter(project_note.read_text(encoding="utf-8"))
+        repo_path = str(metadata.get("repo_path", ""))
+        repo_canon_path = str(metadata.get("repo_canon_path", ""))
+        expected_repo = str(repo_root)
+        expected_canon = str(repo_root / ".project-memory/canon/current-state.md")
+        if repo_path != expected_repo:
+            drift.append(f"Project hub repo_path mismatch: `{repo_path}` != `{expected_repo}`")
+        if repo_canon_path != expected_canon:
+            drift.append(f"Project hub repo_canon_path mismatch: `{repo_canon_path}` != `{expected_canon}`")
+        if args.mode == "project-local":
+            state_authority.extend(project_hub_state_authority_issues(project_note, contract, authority_markers))
+
+    hygiene_targets = [repo_root / "AGENTS.md"] + sorted((repo_root / ".project-memory/canon").glob("*.md"))
+    for path in hygiene_targets:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        context_hygiene.extend(file_is_prose_heavy(path, text))
+        context_hygiene.extend(file_has_discoverable_commands(path, text))
+    if args.mode == "project-local":
+        state_authority.extend(pointer_doc_state_authority_issues(repo_root, contract, authority_markers))
+        state_authority.extend(project_memory_placeholder_issues(repo_root, contract))
+
+    report_lines = [
+        "# Memory Audit Report",
+        "",
+        f"- Project: `{args.project}`",
+        f"- Mode: `{args.mode}`",
+        f"- Drift issues: `{len(drift)}`",
+        f"- Duplicate ids: `{len(duplicates)}`",
+        f"- Stale notes: `{len(stale)}`",
+        f"- Missing metadata: `{len(missing_metadata)}`",
+        f"- Context hygiene issues: `{len(context_hygiene)}`",
+        f"- State authority issues: `{len(state_authority)}`",
+    ]
+
+    if drift:
+        report_lines.extend(["", "## Drift"] + [f"- {item}" for item in drift])
+    if duplicates:
+        report_lines.extend(["", "## Duplicate IDs"] + [f"- `{note_id}`: {', '.join(paths)}" for note_id, paths in duplicates])
+    if stale:
+        report_lines.extend(["", "## Stale Notes"] + [f"- {item}" for item in stale])
+    if missing_metadata:
+        report_lines.extend(["", "## Missing Metadata"] + [f"- `{item}`" for item in missing_metadata])
+    if context_hygiene:
+        report_lines.extend(["", "## Context Hygiene"] + [f"- {item}" for item in context_hygiene])
+    if state_authority:
+        report_lines.extend(["", "## State Authority"] + [f"- {item}" for item in state_authority])
+
+    report_path = Path(args.report or (repo_root / ".automation/workspace/memory-audit-report.md"))
+    write_text(report_path, "\n".join(report_lines))
+
+    has_errors = bool(drift or duplicates or stale or missing_metadata or context_hygiene or state_authority)
+    if args.fail_on_drift and has_errors:
+        return 1
+    print(report_path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

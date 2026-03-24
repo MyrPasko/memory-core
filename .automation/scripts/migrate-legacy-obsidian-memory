@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import (  # noqa: E402
+    build_project_hub_text_for_project,
+    detect_verification,
+    first_heading,
+    now_utc_date,
+    parse_frontmatter,
+    rebuild_indexes,
+    slugify,
+    summary_from_text,
+    titleize_slug,
+    write_text,
+)
+
+
+WIKI_LINK_RE = re.compile(r"\[\[(.+?)\]\]")
+DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Migrate legacy Obsidian memory artifacts to Memory V3 metadata.")
+    parser.add_argument("--project", default="")
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
+    parser.add_argument("--apply", action="store_true")
+    return parser.parse_args()
+
+
+def extract_session_metadata(body: str) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for line in body.splitlines():
+        match = re.match(r"-\s+\*\*(.+?)\*\*:\s*(.+)$", line.strip())
+        if match:
+            metadata[match.group(1).strip().lower()] = match.group(2).strip()
+    return metadata
+
+
+def infer_project_slug(raw: str, fallback_project: str) -> str:
+    body_match = re.search(r"Project Focus\*\*:\s*(.+)", raw)
+    if body_match:
+        return slugify(body_match.group(1).strip())
+    inline_match = re.search(r"Project Focus:\s*([^\"\]\n]+)", raw)
+    if inline_match:
+        return slugify(inline_match.group(1).strip())
+    metadata, _ = parse_frontmatter(raw)
+    if metadata.get("project"):
+        return slugify(str(metadata["project"]))
+    return slugify(fallback_project)
+
+
+def infer_repo_path(project_slug: str, repo_root: Path) -> str:
+    candidate = repo_root.parent / project_slug
+    if candidate.exists():
+        return str(candidate)
+    if project_slug == slugify(repo_root.name):
+        return str(repo_root)
+    return ""
+
+
+def infer_pattern_task_types(title: str, body: str) -> list[str]:
+    lowered = f"{title}\n{body}".lower()
+    task_types: list[str] = []
+    if any(token in lowered for token in ["workflow", "review", "merge-ready", "closeout", "docs", "automation", "runner", "recovery", "skill"]):
+        task_types.extend(["infra", "review-closeout"])
+    if any(token in lowered for token in ["bug", "error", "regression", "failure", "fix"]):
+        task_types.extend(["bugfix", "investigation"])
+    if any(token in lowered for token in ["ui", "dashboard", "component", "domain", "feature", "chat", "insight", "mobile", "frontend", "backend"]):
+        task_types.append("feature")
+    if not task_types:
+        task_types.append("feature")
+    return sorted(dict.fromkeys(task_types))
+
+
+def infer_session_task_type(title: str, body: str, section_meta: dict[str, str]) -> str:
+    lowered = f"{title}\n{body}".lower()
+    session_type = section_meta.get("session type", "").lower()
+    if any(token in session_type for token in ["closeout", "review"]):
+        return "review-closeout"
+    if "development" in session_type:
+        if any(token in lowered for token in ["runner", "workflow", "automation", "docs sync", "recovery", "repo setup"]):
+            return "infra"
+        if any(token in lowered for token in ["error", "fix", "cleanup", "regression", "stabilization"]):
+            return "bugfix"
+        return "feature"
+    if any(token in lowered for token in ["merge-ready", "closeout", "review"]):
+        return "review-closeout"
+    if any(token in lowered for token in ["runner", "workflow", "automation", "docs sync", "recovery", "repo setup"]):
+        return "infra"
+    if any(token in lowered for token in ["error", "fix", "cleanup", "regression", "stabilization"]):
+        return "bugfix"
+    return "feature"
+
+
+def extract_latest_date(text: str, fallback: str) -> str:
+    dates = DATE_RE.findall(text)
+    if not dates:
+        return fallback
+    return sorted(dates)[-1]
+
+
+def extract_related_patterns(body: str, available_patterns: set[str]) -> list[str]:
+    related = []
+    for match in WIKI_LINK_RE.findall(body):
+        label = match.split("|", 1)[0].strip()
+        if label in available_patterns:
+            related.append(label)
+    return sorted(dict.fromkeys(related))
+
+
+def build_pattern_frontmatter(path: Path, project: str, today: str) -> str:
+    raw = path.read_text(encoding="utf-8")
+    title = first_heading(raw) or path.stem
+    task_types = infer_pattern_task_types(title, raw)
+    verified_at = extract_latest_date(raw, today)
+    metadata = {
+        "id": f"pattern-{slugify(path.stem)}",
+        "status": "validated",
+        "scope": "cross-project",
+        "projects": [project],
+        "task_types": task_types,
+        "tags": sorted(dict.fromkeys(slugify(path.stem).split("-"))),
+        "last_verified_at": verified_at,
+        "evidence_sessions": [],
+        "related_failures": [],
+        "related_code_refs": [],
+    }
+    return "---\n" + "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value}" for key, value in metadata.items()) + "\n---\n\n" + raw.lstrip()
+
+
+def build_session_frontmatter(path: Path, fallback_project: str, repo_root: Path, available_patterns: set[str], today: str) -> str:
+    raw = path.read_text(encoding="utf-8")
+    _, body = parse_frontmatter(raw)
+    source_body = body or raw
+    title = path.stem
+    section_meta = extract_session_metadata(source_body)
+    date = section_meta.get("date", "")
+    if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", date):
+        date = f"{path.parent.name[:4]}-{path.parent.name[4:6]}-{path.parent.name[6:8]}" if re.fullmatch(r"\d{8}", path.parent.name) else today
+    branch = section_meta.get("active branch", "unknown")
+    project = infer_project_slug(raw, fallback_project)
+    related_patterns = extract_related_patterns(source_body, available_patterns)
+    metadata = {
+        "id": slugify(path.stem),
+        "project": project,
+        "status": "validated",
+        "task_id": path.stem,
+        "task_type": infer_session_task_type(path.stem, source_body, section_meta),
+        "date": date,
+        "last_seen_at": date,
+        "repo": infer_repo_path(project, repo_root),
+        "branch": branch,
+        "outcome": "validated",
+        "verification": detect_verification(source_body),
+        "files_touched": [],
+        "related_patterns": related_patterns,
+        "related_failures": [],
+        "related_decisions": [],
+        "next_retrieval_hints": summary_from_text(source_body, limit=3),
+    }
+    return "---\n" + "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value}" for key, value in metadata.items()) + "\n---\n\n" + source_body.lstrip()
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    obsidian_root = Path(args.obsidian_root).expanduser().resolve()
+    project = args.project or repo_root.name
+    today = now_utc_date()
+
+    patterns_root = obsidian_root / "Patterns"
+    sessions_root = obsidian_root / "Sessions"
+    project_note = obsidian_root / "Projects" / project / "Index.md"
+    current_state_path = repo_root / ".project-memory/canon/current-state.md"
+    template_path = repo_root / ".project-memory/templates/obsidian/project-hub-summary.md"
+
+    pattern_paths = sorted(patterns_root.glob("*.md"))
+    available_patterns = {path.stem for path in pattern_paths}
+    session_paths = sorted(sessions_root.glob("*/*.md"))
+
+    migrated_patterns = []
+    migrated_sessions = []
+
+    for path in pattern_paths:
+        raw = path.read_text(encoding="utf-8")
+        if raw.startswith("---\n"):
+            metadata, _ = parse_frontmatter(raw)
+            if metadata.get("id") and metadata.get("status"):
+                continue
+        migrated_patterns.append(str(path))
+        if args.apply:
+            write_text(path, build_pattern_frontmatter(path, project, today))
+
+    for path in session_paths:
+        migrated_sessions.append(str(path))
+        if args.apply:
+            write_text(path, build_session_frontmatter(path, project, repo_root, available_patterns, today))
+
+    project_hub_text = build_project_hub_text_for_project(
+        template_path=template_path,
+        obsidian_root=obsidian_root,
+        project=project,
+        repo_path=str(repo_root),
+        repo_canon_path=str(current_state_path),
+    )
+
+    if args.apply:
+        project_note.parent.mkdir(parents=True, exist_ok=True)
+        write_text(project_note, project_hub_text)
+        rebuild_indexes(obsidian_root)
+
+    report = {
+        "project": project,
+        "patterns_migrated": len(migrated_patterns),
+        "sessions_migrated": len(migrated_sessions),
+        "project_hub": str(project_note),
+        "apply": args.apply,
+    }
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

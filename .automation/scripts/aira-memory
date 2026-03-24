@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+WORKSPACE_DIR="$ROOT_DIR/.automation/workspace"
+STATE_FILE="$WORKSPACE_DIR/memory-session.env"
+
+cd "$ROOT_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  aira-memory <command> [args...]
+
+Commands:
+  prepare            Build a task-aware context bundle
+  feature            Shortcut for `prepare --task-type feature`
+  bugfix             Shortcut for `prepare --task-type bugfix`
+  infra              Shortcut for `prepare --task-type infra`
+  investigation      Shortcut for `prepare --task-type investigation`
+  review-closeout    Shortcut for `prepare --task-type review-closeout`
+  close              Run the standard memory closeout loop
+  finish             Close memory with inferred defaults
+  audit              Run memory audit in project-local or vault-wide mode
+  rebuild-hub        Rebuild the generated Obsidian project hub
+  help               Show this help
+
+Examples:
+  ./.automation/scripts/aira-memory bugfix --query "fix auth redirect loop"
+  ./.automation/scripts/aira-memory feature --query "add optimistic row editing"
+  ./.automation/scripts/aira-memory finish --task-id bugfix-001
+  ./.automation/scripts/aira-memory finish --task-id bugfix-001 --apply
+  ./.automation/scripts/aira-memory audit --mode project-local --fail-on-drift
+
+Default behavior:
+  - `finish` infers `--project` from `/.project-memory/canon/current-state.md` or the repo directory name
+  - `finish` infers `--task-type` from the latest `prepare`/shortcut command
+  - `finish` defaults `--input` to `.automation/workspace/implement.result.md`,
+    then `.automation/workspace/fix.result.md` if present
+
+Notes:
+  - `prepare` and the task shortcuts wrap `.automation/scripts/build-context-bundle`
+  - `close` and `finish` wrap `.automation/scripts/close-memory-loop`
+  - `audit` wraps `.automation/scripts/audit-memory`
+  - `rebuild-hub` wraps `.automation/scripts/rebuild-project-hub`
+EOF
+}
+
+ensure_workspace() {
+  mkdir -p "$WORKSPACE_DIR"
+}
+
+derive_project() {
+  local current_state="$ROOT_DIR/.project-memory/canon/current-state.md"
+  if [[ -f "$current_state" ]]; then
+    local project_name
+    project_name="$(
+      awk -F': ' '
+        /^project_id:/ { print $2; exit }
+        /^project:/ { print $2; exit }
+      ' "$current_state" | tr -d '"' | tr -d "'"
+    )"
+    if [[ -n "$project_name" ]]; then
+      printf '%s\n' "$project_name"
+      return 0
+    fi
+  fi
+  basename "$ROOT_DIR"
+}
+
+save_session_state() {
+  local task_type="$1"
+  ensure_workspace
+  cat >"$STATE_FILE" <<EOF
+TASK_TYPE=$task_type
+EOF
+}
+
+load_session_task_type() {
+  if [[ -f "$STATE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$STATE_FILE"
+    if [[ -n "${TASK_TYPE:-}" ]]; then
+      printf '%s\n' "$TASK_TYPE"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+prepend_project_if_missing() {
+  local args=("$@")
+  local has_project="false"
+  local index=0
+
+  while [[ $index -lt ${#args[@]} ]]; do
+    if [[ "${args[$index]}" == "--project" ]]; then
+      has_project="true"
+      break
+    fi
+    index=$((index + 1))
+  done
+
+  if [[ "$has_project" == "false" ]]; then
+    args=(--project "$(derive_project)" "${args[@]}")
+  fi
+
+  printf '%s\n' "${args[@]}"
+}
+
+default_input_path() {
+  if [[ -f "$ROOT_DIR/.automation/workspace/implement.result.md" ]]; then
+    printf '%s\n' "$ROOT_DIR/.automation/workspace/implement.result.md"
+    return 0
+  fi
+  if [[ -f "$ROOT_DIR/.automation/workspace/fix.result.md" ]]; then
+    printf '%s\n' "$ROOT_DIR/.automation/workspace/fix.result.md"
+    return 0
+  fi
+  return 1
+}
+
+run_prepare() {
+  local task_type="$1"
+  shift
+
+  "$ROOT_DIR/.automation/scripts/build-context-bundle" --task-type "$task_type" "$@"
+  save_session_state "$task_type"
+}
+
+run_prepare_passthrough() {
+  local explicit_task_type=""
+  local args=("$@")
+  local index=0
+  while [[ $index -lt ${#args[@]} ]]; do
+    if [[ "${args[$index]}" == "--task-type" && $((index + 1)) -lt ${#args[@]} ]]; then
+      explicit_task_type="${args[$((index + 1))]}"
+      break
+    fi
+    index=$((index + 1))
+  done
+
+  "$ROOT_DIR/.automation/scripts/build-context-bundle" "${args[@]}"
+
+  if [[ -n "$explicit_task_type" ]]; then
+    save_session_state "$explicit_task_type"
+  fi
+}
+
+run_finish() {
+  local args=("$@")
+  local has_project="false"
+  local has_task_type="false"
+  local has_input="false"
+  local index=0
+
+  while [[ $index -lt ${#args[@]} ]]; do
+    case "${args[$index]}" in
+      --project)
+        has_project="true"
+        index=$((index + 2))
+        ;;
+      --task-type)
+        has_task_type="true"
+        index=$((index + 2))
+        ;;
+      --input)
+        has_input="true"
+        index=$((index + 2))
+        ;;
+      *)
+        index=$((index + 1))
+        ;;
+    esac
+  done
+
+  if [[ "$has_project" == "false" ]]; then
+    args=(--project "$(derive_project)" "${args[@]}")
+  fi
+
+  if [[ "$has_task_type" == "false" ]]; then
+    local inferred_task_type=""
+    if inferred_task_type="$(load_session_task_type)"; then
+      args=(--task-type "$inferred_task_type" "${args[@]}")
+    else
+      echo "finish requires --task-type when no previous prepare command has recorded session state" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ "$has_input" == "false" ]]; then
+    local inferred_input=""
+    if inferred_input="$(default_input_path)"; then
+      args=(--input "$inferred_input" "${args[@]}")
+    else
+      echo "finish requires --input when neither .automation/workspace/implement.result.md nor fix.result.md exists" >&2
+      exit 1
+    fi
+  fi
+
+  exec "$ROOT_DIR/.automation/scripts/close-memory-loop" "${args[@]}"
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 1
+fi
+
+command="$1"
+shift
+
+case "$command" in
+  prepare|bundle)
+    run_prepare_passthrough "$@"
+    ;;
+  feature)
+    run_prepare feature "$@"
+    ;;
+  bugfix)
+    run_prepare bugfix "$@"
+    ;;
+  infra)
+    run_prepare infra "$@"
+    ;;
+  investigation|investigate)
+    run_prepare investigation "$@"
+    ;;
+  review-closeout|review)
+    run_prepare review-closeout "$@"
+    ;;
+  close|closeout)
+    exec "$ROOT_DIR/.automation/scripts/close-memory-loop" "$@"
+    ;;
+  finish)
+    run_finish "$@"
+    ;;
+  audit)
+    if [[ "$#" -eq 0 ]]; then
+      exec "$ROOT_DIR/.automation/scripts/audit-memory" --project "$(derive_project)" --mode project-local
+    fi
+    _audit_args=()
+    while IFS= read -r line; do
+      _audit_args+=("$line")
+    done < <(prepend_project_if_missing "$@")
+    exec "$ROOT_DIR/.automation/scripts/audit-memory" "${_audit_args[@]}"
+    ;;
+  rebuild-hub|hub)
+    if [[ "$#" -eq 0 ]]; then
+      exec "$ROOT_DIR/.automation/scripts/rebuild-project-hub" --project "$(derive_project)"
+    fi
+    _hub_args=()
+    while IFS= read -r line; do
+      _hub_args+=("$line")
+    done < <(prepend_project_if_missing "$@")
+    exec "$ROOT_DIR/.automation/scripts/rebuild-project-hub" "${_hub_args[@]}"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "Unknown aira-memory command: $command" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,82 @@
+{
+  "version": "3",
+  "repo_authority": "repo",
+  "external_authority": "obsidian",
+  "allowed_artifact_types": [
+    "session",
+    "pattern",
+    "failure",
+    "decision"
+  ],
+  "note_statuses": [
+    "candidate",
+    "validated",
+    "stale",
+    "deprecated"
+  ],
+  "promotion_rules": {
+    "pattern": {
+      "requires": [
+        "reusable_insight",
+        "non_conflicting_with_canon"
+      ],
+      "reject_if_contains": [
+        "one-off",
+        "temporary hack",
+        "slice-scoped trade-off only"
+      ]
+    },
+    "failure": {
+      "requires_any": [
+        "review_correction",
+        "regression",
+        "blocked_verification",
+        "repeated_reasoning_mistake"
+      ]
+    },
+    "decision": {
+      "requires": [
+        "tradeoff",
+        "alternatives"
+      ]
+    },
+    "repo_canon": {
+      "mode": "manual_gate"
+    }
+  },
+  "drift_rules": {
+    "repo_canon_beats_project_hub": true,
+    "require_repo_canon_pointer_in_project_hub": true,
+    "stale_threshold_days": 180,
+    "allow_missing_project_hub_in_project_local_mode": true
+  },
+  "state_authority": {
+    "repo_active_state_file": ".project-memory/canon/current-state.md",
+    "repo_verification_file": ".project-memory/verify-commands.md",
+    "pointer_only_docs": [
+      "AGENTS.md",
+      "docs/process/START-HERE.md",
+      "docs/process/PROJECT-RESURRECTION.md"
+    ],
+    "generated_summary_docs": [
+      "obsidian-project-hub"
+    ],
+    "forbidden_active_state_headings": [
+      "## current focus",
+      "## current state",
+      "## active baseline",
+      "## merged baseline",
+      "## next slice",
+      "## next likely work",
+      "## next pr queue",
+      "## verification reality",
+      "## current restore point"
+    ]
+  },
+  "context_hygiene": {
+    "global_context_policy": "minimal-effective-context",
+    "discoverable_info_forbidden_in_global_context": true,
+    "root_bootstrap_max_role": "pointer-and-landmines-only",
+    "prefer_executable_rails_over_markdown_rules": true
+  }
+}

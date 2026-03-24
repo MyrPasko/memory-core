@@ -1,0 +1,4 @@
+interface:
+  display_name: "Memory Audit"
+  short_description: "Audit Memory V3 drift and stale notes"
+  default_prompt: "Use $memory-audit-skill to audit the Memory V3 layer for drift, duplicates, and stale notes."
