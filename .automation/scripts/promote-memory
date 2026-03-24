@@ -89,6 +89,7 @@ def main() -> int:
             artifacts.append((singular, item["path"]))
 
     promoted = []
+    planned = []
     rejected = []
     conflicts = []
 
@@ -107,8 +108,10 @@ def main() -> int:
         if destination.exists() and not args.apply:
             conflicts.append({"kind": kind, "destination": str(destination)})
             continue
-        promoted.append({"kind": kind, "source": source, "destination": str(destination)})
+        candidate = {"kind": kind, "source": source, "destination": str(destination)}
+        planned.append(candidate)
         if args.apply:
+            promoted.append(candidate)
             write_text(destination, text)
 
     refreshed = {}
@@ -150,11 +153,14 @@ def main() -> int:
         "",
         f"- Manifest: `{manifest_path}`",
         f"- Apply mode: `{args.apply}`",
+        f"- Planned writes: `{len(planned)}`",
         f"- Promoted: `{len(promoted)}`",
         f"- Rejected: `{len(rejected)}`",
         f"- Conflicts: `{len(conflicts)}`",
         f"- Project hub: `{project_hub_status}`",
     ]
+    if not args.apply and planned:
+        report_lines.extend(["", "## Planned Writes"] + [f"- `{item['kind']}` -> `{item['destination']}`" for item in planned])
     if refreshed:
         report_lines.extend(["", "## Refreshed Indexes"] + [f"- `{path}`" for path in refreshed.values()])
     if rejected:
@@ -164,7 +170,7 @@ def main() -> int:
 
     report_path = manifest_path.parent / "promotion-report.md"
     write_text(report_path, "\n".join(report_lines))
-    print(json.dumps({"report": str(report_path), "promoted": promoted, "rejected": rejected, "conflicts": conflicts}, ensure_ascii=False))
+    print(json.dumps({"report": str(report_path), "planned": planned, "promoted": promoted, "rejected": rejected, "conflicts": conflicts}, ensure_ascii=False))
     return 0
 
 

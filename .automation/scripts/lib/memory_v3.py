@@ -367,7 +367,9 @@ def normalize_extensions(extensions: Iterable[str] | None) -> set[str]:
 
 def path_matches_rules(relative_path: str, patterns: Iterable[str] | None) -> bool:
     for raw_pattern in patterns or []:
-        pattern = str(raw_pattern).strip().lstrip("./")
+        pattern = str(raw_pattern).strip()
+        if pattern.startswith("./"):
+            pattern = pattern[2:]
         if not pattern:
             continue
         if fnmatch.fnmatch(relative_path, pattern):

@@ -22,6 +22,22 @@ Options:
 EOF
 }
 
+resolve_payload_dir() {
+  if [[ -d "$PAYLOAD_DIR/.project-memory" && -d "$PAYLOAD_DIR/.automation" ]]; then
+    printf '%s\n' "$PAYLOAD_DIR"
+    return 0
+  fi
+
+  if [[ -d "$BUNDLE_DIR/.project-memory" && -d "$BUNDLE_DIR/.automation" ]]; then
+    printf '%s\n' "$BUNDLE_DIR"
+    return 0
+  fi
+
+  echo "Unable to locate payload assets next to installer: $BUNDLE_DIR" >&2
+  echo "Expected either payload/.project-memory + payload/.automation or source repo .project-memory + .automation." >&2
+  exit 1
+}
+
 backup_if_exists() {
   local path="$1"
   if [[ -e "$path" ]]; then
@@ -247,6 +263,8 @@ if [[ ! -d "$TARGET/.git" ]]; then
   echo "Target does not look like a git repository: $TARGET" >&2
   exit 1
 fi
+
+PAYLOAD_DIR="$(resolve_payload_dir)"
 
 copy_tree "$PAYLOAD_DIR/.project-memory" "$TARGET/.project-memory"
 copy_tree "$PAYLOAD_DIR/.automation" "$TARGET/.automation"
