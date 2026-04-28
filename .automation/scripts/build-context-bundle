@@ -25,7 +25,7 @@ from memory_v3 import (  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a Memory V3 context bundle.")
+    parser = argparse.ArgumentParser(description="Build a Memory Core context bundle.")
     parser.add_argument("--task-type", required=True)
     parser.add_argument("--query", required=True)
     parser.add_argument("--repo-root", default=".")

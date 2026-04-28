@@ -23,7 +23,7 @@ from memory_v3 import (  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Promote candidate memory artifacts into Obsidian.")
+    parser = argparse.ArgumentParser(description="Promote candidate Memory Core artifacts into Obsidian.")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
@@ -153,12 +153,22 @@ def main() -> int:
         "",
         f"- Manifest: `{manifest_path}`",
         f"- Apply mode: `{args.apply}`",
+        f"- Mode: `{'apply' if args.apply else 'dry-run'}`",
         f"- Planned writes: `{len(planned)}`",
-        f"- Promoted: `{len(promoted)}`",
+        f"- Applied writes: `{len(promoted)}`",
         f"- Rejected: `{len(rejected)}`",
         f"- Conflicts: `{len(conflicts)}`",
         f"- Project hub: `{project_hub_status}`",
     ]
+    if not args.apply:
+        report_lines.extend(
+            [
+                "",
+                "## Dry Run",
+                "- No vault notes were modified.",
+                "- Review the planned writes and rerun with `--apply` only after explicit approval.",
+            ]
+        )
     if not args.apply and planned:
         report_lines.extend(["", "## Planned Writes"] + [f"- `{item['kind']}` -> `{item['destination']}`" for item in planned])
     if refreshed:

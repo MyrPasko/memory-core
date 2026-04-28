@@ -1,22 +1,23 @@
 ---
 project: memory-core
-merged_baseline: repository-initialized-no-implementation
-next_slice: unassigned
-active_risks: ["project-memory-not-yet-specialized"]
-verification_reality: ["no-verification-commands-curated-yet"]
-authoritative_since: 2026-03-24
+merged_baseline: memory-core-v4-source-repo
+next_slice: implement-memory-core-v4
+active_risks: ["installer-and-workflow-must-stay-portable", "battle-tested-behavior-must-not-leak-project-specific-artifacts"]
+verification_reality: ["repo-level smoke tests are required for each packaging change"]
+authoritative_since: 2026-04-27
 ---
 
 # Current State
 
 ## Merged Baseline
-- The repository exists, but no implementation baseline has been recorded into project memory yet.
+- The repository is the canonical source for the installable Memory Core V4 bundle.
 
 ## Next Slice
-- No slice is assigned yet.
+- Complete the v4 installation surface and workflow behavior hardening.
 
 ## Active Risks
-- Greenfield defaults are still in place. Replace them with real risks as soon as the first task is defined.
+- Packaging can drift away from the actual installed surface if source-only assets are not included in the bundle.
+- Retrieval and closeout can still look correct while losing verification fidelity unless extraction stays strict.
 
 ## Verification Reality
-- No exact verification commands are curated yet. Do not imply successful verification until `/.project-memory/verify-commands.md` is filled with real commands.
+- Smoke tests must cover install from source repo, install from built bundle, context generation, closeout, and audit behavior.

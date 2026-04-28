@@ -6,14 +6,15 @@ bundle_target: implementation
 # Infra Playbook
 
 ## Retrieval
-- Load `constraints.md` and `workflow.md`.
-- Pull patterns for workflow, review, verification, or documentation alignment.
-- Pull failures tied to toolchain, automation, or drift.
+- Load the controller-worker contract, workflow, and constraints.
+- Pull decisions and failures that mention automation, verification, drift, or packaging.
+- Include code examples only from infra-relevant paths.
 
 ## Delivery
-- Keep infra fixes isolated from product behavior.
-- Prefer deterministic scripts and documented rules over chat-only conventions.
-- Validate on the exact tool boundary affected by the change.
+- Make gates and operational ownership explicit.
+- Treat packaging, install behavior, and verification as first-class outcomes.
+- Record the accepted write-scope before implementation starts.
 
 ## Distillation
-- Promote workflow rules, verification traps, and recovery lessons.
+- Promote operational rules only when they generalize across repositories.
+- Prefer executable rails over prose-only instructions.

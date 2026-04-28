@@ -1,6 +1,6 @@
 ---
 name: memory-audit-skill
-description: Audit Memory V3 drift, duplicate IDs, stale notes, project-hub alignment, and context minimalism. Use when Aira needs to verify that repo canon and distilled knowledge still agree without growing into broad repo manuals.
+description: Audit Memory Core drift, duplicate IDs, stale notes, project-hub alignment, and context minimalism. Use when Aira needs to verify that repo canon and distilled knowledge still agree without growing into broad repo manuals.
 ---
 
 # Memory Audit Skill

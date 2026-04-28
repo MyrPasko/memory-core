@@ -1,19 +1,19 @@
 ---
 task_type: investigation
-bundle_target: research
+bundle_target: analysis
 ---
 
 # Investigation Playbook
 
 ## Retrieval
-- Load `current-state.md`, `constraints.md`, and the closest failures/decisions first.
-- Pull up to 2 similar sessions and 2 code examples.
-- Prefer evidence notes over broad pattern libraries when the problem is still ambiguous.
+- Load the controller-worker contract, current state, and constraints.
+- Pull failures, sessions, and landmines before patterns unless the task already points to a stable reusable solution.
+- Prefer exact references over broad contextual explanation.
 
 ## Delivery
-- Separate confirmed facts from hypotheses.
-- Record exact blockers, reproduction steps, and disqualified causes.
-- Do not promote speculative conclusions.
+- Separate observed facts from interpretation.
+- If the investigation uncovers a likely fix, state the candidate write-scope but do not implement it implicitly.
+- Record blocked or partial verification honestly.
 
 ## Distillation
-- Promote only confirmed failure knowledge or durable decision rationale.
+- Promote only the findings that will help future slices avoid repeated false starts.

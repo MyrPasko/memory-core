@@ -44,6 +44,7 @@ Notes:
   - `close` and `finish` wrap `.automation/scripts/close-memory-loop`
   - `audit` wraps `.automation/scripts/audit-memory`
   - `rebuild-hub` wraps `.automation/scripts/rebuild-project-hub`
+  - for medium or large slices, the canonical controller entrypoint is `/.claude/agents/aira-controller.md`
 EOF
 }
 

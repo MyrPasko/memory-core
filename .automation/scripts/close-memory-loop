@@ -14,7 +14,7 @@ from memory_v3 import load_json_yaml, now_utc_date, parse_frontmatter, write_tex
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the standard Memory V3 closeout loop.")
+    parser = argparse.ArgumentParser(description="Run the standard Memory Core closeout loop.")
     parser.add_argument("--project", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--task-type", required=True)

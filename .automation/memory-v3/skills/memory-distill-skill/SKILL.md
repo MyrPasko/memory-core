@@ -1,6 +1,6 @@
 ---
 name: memory-distill-skill
-description: Extract candidate session capsules, patterns, failures, and decisions from completed task artifacts without promoting them automatically. Use when Aira has implementation/review outputs and wants Memory V3 candidates in `.automation/workspace/memory-candidates/`.
+description: Extract candidate session capsules, patterns, failures, and decisions from completed task artifacts without promoting them automatically. Use when Aira has implementation/review outputs and wants Memory Core candidates in `.automation/workspace/memory-candidates/`.
 ---
 
 # Memory Distill Skill

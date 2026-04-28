@@ -27,7 +27,7 @@ from memory_v3 import (  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Audit Memory V3 drift, duplicates, and stale notes.")
+    parser = argparse.ArgumentParser(description="Audit Memory Core drift, duplicates, and stale notes.")
     parser.add_argument("--project", required=True)
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--obsidian-root", default=str(Path.home() / "obsidian/main/CODEX_AIRA"))
@@ -141,6 +141,65 @@ def project_memory_placeholder_issues(repo_root: Path, contract: dict) -> list[s
     return issues
 
 
+def active_state_staleness_issues(repo_root: Path, contract: dict) -> list[str]:
+    authority = contract.get("state_authority", {})
+    current_state_path = repo_root / authority.get("repo_active_state_file", ".project-memory/canon/current-state.md")
+    if not current_state_path.exists():
+        return []
+    metadata, _ = parse_frontmatter(current_state_path.read_text(encoding="utf-8"))
+    last_seen = str(metadata.get("authoritative_since", "")).strip()
+    if not last_seen:
+        return [f"{current_state_path} missing `authoritative_since`"]
+    try:
+        days = (datetime.now(timezone.utc).date() - datetime.strptime(last_seen, "%Y-%m-%d").date()).days
+    except ValueError:
+        return [f"{current_state_path} has invalid `authoritative_since` value `{last_seen}`"]
+    max_days = int(contract.get("drift_rules", {}).get("active_state_max_age_days", 0))
+    if max_days and days > max_days:
+        return [f"{current_state_path} appears stale for {days} days"]
+    return []
+
+
+def manifest_completeness_issues(manifest_path: str | None, contract: dict) -> list[str]:
+    if not manifest_path:
+        return []
+    path = Path(manifest_path).expanduser().resolve()
+    if not path.exists():
+        return [f"Missing manifest for completeness checks: {path}"]
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    issues = []
+    drift_rules = contract.get("drift_rules", {})
+
+    input_paths = [Path(item) for item in manifest.get("input_paths", []) if str(item).strip()]
+    if drift_rules.get("require_implement_result", False) and not any(candidate.name == "implement.result.md" for candidate in input_paths):
+        issues.append("Closeout manifest did not include `implement.result.md` as an input artifact")
+
+    verification = manifest.get("verification", {})
+    overall = str(verification.get("overall", "unknown")).strip()
+    evidence = verification.get("evidence", [])
+    if drift_rules.get("require_verification_evidence", False):
+        if overall in {"unknown", "not-run"}:
+            issues.append("Closeout manifest is missing concrete verification status")
+        if not evidence:
+            issues.append("Closeout manifest is missing verification evidence lines")
+
+    if drift_rules.get("require_review_closeout_resolution", False) and manifest.get("open_findings"):
+        issues.append("Closeout manifest still contains unresolved open findings")
+
+    if drift_rules.get("enforce_write_scope_match", False):
+        write_scope = [str(item).strip().strip("`") for item in manifest.get("write_scope", []) if str(item).strip()]
+        files_touched = [str(item).strip() for item in manifest.get("files_touched", []) if str(item).strip()]
+        if write_scope and files_touched:
+            scope_violations = []
+            for touched in files_touched:
+                if not any(touched == scope or touched.startswith(f"{scope.rstrip('/')}/") for scope in write_scope):
+                    scope_violations.append(touched)
+            if scope_violations:
+                issues.append(f"Files changed outside accepted write-scope: {', '.join(scope_violations)}")
+
+    return issues
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path(args.repo_root).resolve()
@@ -161,6 +220,7 @@ def main() -> int:
     missing_metadata = []
     context_hygiene = []
     state_authority = []
+    completion_issues = []
     ids = defaultdict(list)
     note_types = ["Patterns", "Failures", "Decisions"]
     if args.mode == "project-local" or selected_paths:
@@ -233,6 +293,8 @@ def main() -> int:
     if args.mode == "project-local":
         state_authority.extend(pointer_doc_state_authority_issues(repo_root, contract, authority_markers))
         state_authority.extend(project_memory_placeholder_issues(repo_root, contract))
+        state_authority.extend(active_state_staleness_issues(repo_root, contract))
+        completion_issues.extend(manifest_completeness_issues(args.manifest, contract))
 
     report_lines = [
         "# Memory Audit Report",
@@ -245,6 +307,7 @@ def main() -> int:
         f"- Missing metadata: `{len(missing_metadata)}`",
         f"- Context hygiene issues: `{len(context_hygiene)}`",
         f"- State authority issues: `{len(state_authority)}`",
+        f"- Completion issues: `{len(completion_issues)}`",
     ]
 
     if drift:
@@ -259,11 +322,13 @@ def main() -> int:
         report_lines.extend(["", "## Context Hygiene"] + [f"- {item}" for item in context_hygiene])
     if state_authority:
         report_lines.extend(["", "## State Authority"] + [f"- {item}" for item in state_authority])
+    if completion_issues:
+        report_lines.extend(["", "## Completion"] + [f"- {item}" for item in completion_issues])
 
     report_path = Path(args.report or (repo_root / ".automation/workspace/memory-audit-report.md"))
     write_text(report_path, "\n".join(report_lines))
 
-    has_errors = bool(drift or duplicates or stale or missing_metadata or context_hygiene or state_authority)
+    has_errors = bool(drift or duplicates or stale or missing_metadata or context_hygiene or state_authority or completion_issues)
     if args.fail_on_drift and has_errors:
         return 1
     print(report_path)

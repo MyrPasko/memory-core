@@ -1,11 +1,11 @@
 ---
 name: memory-operator-skill
-description: Operate Memory V3 through the human-facing `./.automation/scripts/aira-memory` wrapper instead of low-level scripts. Use when Aira or another LLM needs to prepare worker context, close the memory loop, audit memory health, or rebuild the generated project hub in a repository with Memory V3 installed.
+description: Operate Memory Core through the human-facing `./.automation/scripts/aira-memory` wrapper instead of low-level scripts. Use when Aira or another LLM needs to prepare worker context, close the memory loop, audit memory health, or rebuild the generated project hub in a repository with Memory Core installed.
 ---
 
 # Memory Operator Skill
 
-Use this skill as the default operator interface for Memory V3.
+Use this skill as the default operator interface for Memory Core.
 
 ## Workflow
 1. Prefer `./.automation/scripts/aira-memory` over direct low-level script calls.
