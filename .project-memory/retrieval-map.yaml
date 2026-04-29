@@ -1,5 +1,5 @@
 {
-  "version": "3",
+  "version": "4",
   "default_output": ".automation/workspace/context-bundle.md",
   "default_manifest": ".automation/workspace/context-bundle.json",
   "default_token_budget": 8000,
@@ -9,7 +9,7 @@
       "playbook": ".project-memory/playbooks/feature.md",
       "bundle_budgets": {
         "root_bootstrap": 950,
-        "always_load_repo": 2400,
+        "always_load_repo": 2600,
         "conditional_repo": 1100,
         "playbook": 1200,
         "obsidian_total": 2600,
@@ -18,8 +18,13 @@
       },
       "always_load": [
         {
+          "path": ".project-memory/canon/controller-worker-contract.md",
+          "sections": ["authority split", "required accepted plan fields", "worker rules", "slice completion standard"],
+          "max_chars": 900
+        },
+        {
           "path": ".project-memory/canon/constraints.md",
-          "sections": ["process", "memory v3", "ownership"],
+          "sections": ["process", "memory core", "ownership"],
           "max_chars": 900
         },
         {
@@ -44,9 +49,9 @@
         },
         {
           "path": ".project-memory/verify-commands.md",
-          "sections": ["frontend", "backend", "notes"],
+          "sections": ["frontend", "backend", "packaging", "notes"],
           "signals": ["verify", "test", "build", "lint", "typecheck", "run"],
-          "max_chars": 500
+          "max_chars": 550
         }
       ],
       "task_specific": {
@@ -65,6 +70,7 @@
           "exclude_paths": [
             ".project-memory/**",
             ".automation/**",
+            ".claude/**",
             "output/**",
             "AGENTS.md"
           ],
@@ -76,7 +82,7 @@
       "playbook": ".project-memory/playbooks/bugfix.md",
       "bundle_budgets": {
         "root_bootstrap": 900,
-        "always_load_repo": 2200,
+        "always_load_repo": 2500,
         "conditional_repo": 1200,
         "playbook": 1100,
         "obsidian_total": 2400,
@@ -85,6 +91,11 @@
       },
       "always_load": [
         {
+          "path": ".project-memory/canon/controller-worker-contract.md",
+          "sections": ["authority split", "required accepted plan fields", "worker rules", "slice completion standard"],
+          "max_chars": 900
+        },
+        {
           "path": ".project-memory/canon/current-state.md",
           "sections": ["active risks", "verification reality"],
           "frontmatter_fields": ["merged_baseline", "active_risks", "verification_reality"],
@@ -92,7 +103,7 @@
         },
         {
           "path": ".project-memory/canon/constraints.md",
-          "sections": ["process", "memory v3", "ownership"],
+          "sections": ["process", "memory core", "ownership"],
           "max_chars": 850
         }
       ],
@@ -105,7 +116,7 @@
         },
         {
           "path": ".project-memory/verify-commands.md",
-          "sections": ["frontend", "backend", "notes"],
+          "sections": ["frontend", "backend", "packaging", "notes"],
           "signals": ["verify", "test", "build", "lint", "typecheck", "regression"],
           "max_chars": 550
         }
@@ -126,6 +137,7 @@
           "exclude_paths": [
             ".project-memory/**",
             ".automation/**",
+            ".claude/**",
             "output/**",
             "AGENTS.md"
           ],
@@ -137,7 +149,7 @@
       "playbook": ".project-memory/playbooks/infra.md",
       "bundle_budgets": {
         "root_bootstrap": 900,
-        "always_load_repo": 2200,
+        "always_load_repo": 2400,
         "conditional_repo": 1200,
         "playbook": 1100,
         "obsidian_total": 2200,
@@ -146,14 +158,19 @@
       },
       "always_load": [
         {
+          "path": ".project-memory/canon/controller-worker-contract.md",
+          "sections": ["authority split", "required accepted plan fields", "worker rules"],
+          "max_chars": 900
+        },
+        {
           "path": ".project-memory/canon/constraints.md",
-          "sections": ["process", "memory v3", "ownership"],
+          "sections": ["process", "memory core", "ownership"],
           "max_chars": 900
         },
         {
           "path": ".project-memory/canon/workflow.md",
-          "sections": ["controller / worker loop", "gates"],
-          "max_chars": 850
+          "sections": ["controlled ai-sdlc loop", "gates", "slice completion"],
+          "max_chars": 950
         }
       ],
       "load_if_missing_signal": [
@@ -199,6 +216,7 @@
           "exclude_paths": [
             ".project-memory/**",
             ".automation/workspace/**",
+            ".claude/**",
             "output/**",
             "AGENTS.md"
           ],
@@ -210,7 +228,7 @@
       "playbook": ".project-memory/playbooks/review-closeout.md",
       "bundle_budgets": {
         "root_bootstrap": 900,
-        "always_load_repo": 2200,
+        "always_load_repo": 2500,
         "conditional_repo": 1100,
         "playbook": 1100,
         "obsidian_total": 2200,
@@ -219,13 +237,18 @@
       },
       "always_load": [
         {
+          "path": ".project-memory/canon/controller-worker-contract.md",
+          "sections": ["authority split", "required accepted plan fields", "slice completion standard"],
+          "max_chars": 900
+        },
+        {
           "path": ".project-memory/canon/workflow.md",
-          "sections": ["controller / worker loop", "gates"],
-          "max_chars": 850
+          "sections": ["controlled ai-sdlc loop", "gates", "slice completion"],
+          "max_chars": 950
         },
         {
           "path": ".project-memory/canon/constraints.md",
-          "sections": ["process", "memory v3", "ownership"],
+          "sections": ["process", "memory core", "ownership"],
           "max_chars": 850
         }
       ],
@@ -239,9 +262,15 @@
         },
         {
           "path": ".project-memory/verify-commands.md",
-          "sections": ["frontend", "backend", "notes"],
+          "sections": ["frontend", "backend", "packaging", "notes"],
           "signals": ["verify", "review", "closeout", "build", "test"],
           "max_chars": 550
+        },
+        {
+          "path": ".project-memory/templates/implement-result.md",
+          "sections": ["verification", "review closeout", "open findings"],
+          "signals": ["implement result", "closeout", "findings", "verification"],
+          "max_chars": 900
         }
       ],
       "task_specific": {
@@ -263,6 +292,7 @@
           "exclude_paths": [
             ".project-memory/**",
             ".automation/**",
+            ".claude/**",
             "output/**",
             "AGENTS.md"
           ],
@@ -274,7 +304,7 @@
       "playbook": ".project-memory/playbooks/investigation.md",
       "bundle_budgets": {
         "root_bootstrap": 950,
-        "always_load_repo": 2200,
+        "always_load_repo": 2500,
         "conditional_repo": 1200,
         "playbook": 1100,
         "obsidian_total": 2600,
@@ -283,6 +313,11 @@
       },
       "always_load": [
         {
+          "path": ".project-memory/canon/controller-worker-contract.md",
+          "sections": ["authority split", "required accepted plan fields", "worker rules"],
+          "max_chars": 900
+        },
+        {
           "path": ".project-memory/canon/current-state.md",
           "sections": ["active risks", "verification reality"],
           "frontmatter_fields": ["merged_baseline", "active_risks", "verification_reality"],
@@ -290,7 +325,7 @@
         },
         {
           "path": ".project-memory/canon/constraints.md",
-          "sections": ["process", "memory v3", "ownership"],
+          "sections": ["process", "memory core", "ownership"],
           "max_chars": 850
         }
       ],
@@ -324,6 +359,7 @@
           "exclude_paths": [
             ".project-memory/**",
             ".automation/**",
+            ".claude/**",
             "output/**",
             "AGENTS.md"
           ],

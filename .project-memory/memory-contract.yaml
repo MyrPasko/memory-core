@@ -1,5 +1,5 @@
 {
-  "version": "3",
+  "version": "4",
   "repo_authority": "repo",
   "external_authority": "obsidian",
   "allowed_artifact_types": [
@@ -48,7 +48,12 @@
     "repo_canon_beats_project_hub": true,
     "require_repo_canon_pointer_in_project_hub": true,
     "stale_threshold_days": 180,
-    "allow_missing_project_hub_in_project_local_mode": true
+    "active_state_max_age_days": 30,
+    "allow_missing_project_hub_in_project_local_mode": true,
+    "require_implement_result": true,
+    "require_verification_evidence": true,
+    "require_review_closeout_resolution": true,
+    "enforce_write_scope_match": true
   },
   "state_authority": {
     "repo_active_state_file": ".project-memory/canon/current-state.md",

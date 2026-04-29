@@ -1,17 +1,18 @@
 ---
 kind: repo-landmines
 project: memory-core
-authoritative_since: 2026-03-24
+authoritative_since: 2026-04-27
 ---
 
 # Repo Landmines
 
 ## Critical Landmines
-- Repo project memory is authoritative over Obsidian when they disagree.
+- This repo packages a portable install bundle. Do not let project-specific trial artifacts leak into the install payload.
+- Repo project memory is authoritative over Obsidian and generated summaries when they disagree.
 - Worker output becomes durable knowledge only after extraction plus explicit promotion.
-- This repository is still in greenfield mode until project-specific landmines are recorded.
+- `output/` is disposable build output and must not become source of truth.
 
 ## Do Not Infer From Code Alone
-- No implementation files means no stack, subsystem, or deployment model is established yet.
-- Verification success must come from real commands and real runs, not from installation defaults.
-- Add only the hidden invariants, risky zones, or deprecated paths that repeatedly cause errors.
+- Existing `memory-v3` names inside some adapter assets do not define the product name. The product surface is `memory-core v4`.
+- Battle-tested strategy notes are design input. They are not install-time repo payload.
+- If an example is domain-specific, move it into an explicit example surface or omit it from installation.

@@ -6,14 +6,13 @@ bundle_target: review
 # Review Closeout Playbook
 
 ## Retrieval
-- Load `current-state.md`, `constraints.md`, and `workflow.md`.
-- Pull the most relevant failures and decisions for the reviewed slice.
-- Pull the latest similar review/closeout session capsule.
+- Load the controller-worker contract, workflow, and implement-result template.
+- Pull failures, decisions, and sessions that mention similar review findings or verification trouble.
 
 ## Delivery
-- Re-check verification evidence before accepting merge-ready status.
-- Keep repo truth and memory truth aligned.
-- Distinguish merge-ready evidence from merged-state canon updates when that difference matters.
+- Treat unresolved findings as hard blockers unless explicitly accepted by the controller.
+- Require concrete verification evidence in `implement.result.md`.
+- Use closeout to confirm the slice is actually complete, not merely coded.
 
 ## Distillation
-- Promote accepted review corrections, new failure modes, and decisions about scope or verification rigor.
+- Promote patterns and failures that materially improve future review quality or closeout discipline.

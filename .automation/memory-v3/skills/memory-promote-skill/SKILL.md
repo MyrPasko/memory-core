@@ -1,6 +1,6 @@
 ---
 name: memory-promote-skill
-description: Promote approved Memory V3 candidate artifacts into Obsidian and refresh indexes through an explicit gate. Use when Aira has reviewed candidate notes and wants to publish only the approved subset.
+description: Promote approved Memory Core candidate artifacts into Obsidian and refresh indexes through an explicit gate. Use when Aira has reviewed candidate notes and wants to publish only the approved subset.
 ---
 
 # Memory Promote Skill

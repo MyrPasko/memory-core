@@ -1,4 +1,4 @@
 interface:
   display_name: "Memory Promote"
-  short_description: "Promote approved Memory V3 notes"
-  default_prompt: "Use $memory-promote-skill to promote approved Memory V3 candidates into Obsidian."
+  short_description: "Promote approved Memory Core notes"
+  default_prompt: "Use $memory-promote-skill to promote approved Memory Core candidates into Obsidian."

@@ -1,6 +1,6 @@
 ---
 name: memory-retrieval-skill
-description: Build a task-aware Memory V3 context bundle from repo canon, playbooks, Obsidian notes, and live code examples. Use when Aira is preparing context for a worker LLM in a repository that has `/.project-memory/` and the memory scripts installed.
+description: Build a task-aware Memory Core context bundle from repo canon, playbooks, Obsidian notes, and live code examples. Use when Aira is preparing context for a worker LLM in a repository that has `/.project-memory/` and the memory scripts installed.
 ---
 
 # Memory Retrieval Skill

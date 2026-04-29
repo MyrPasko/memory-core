@@ -15,12 +15,20 @@ related_patterns: {{related_patterns_json}}
 related_failures: {{related_failures_json}}
 related_decisions: {{related_decisions_json}}
 next_retrieval_hints: {{next_retrieval_hints_json}}
+write_scope: {{write_scope_json}}
+open_findings: {{open_findings_json}}
 ---
 
 # {{title}}
 
 ## Summary
 {{summary}}
+
+## Write Scope
+{{write_scope}}
+
+## Verification
+{{verification_summary}}
 
 ## Decisions
 {{decisions}}
@@ -30,6 +38,9 @@ next_retrieval_hints: {{next_retrieval_hints_json}}
 
 ## Reuse Signals
 {{reuse_signals}}
+
+## Open Findings
+{{open_findings}}
 
 ## Next Retrieval Hints
 {{next_hints}}

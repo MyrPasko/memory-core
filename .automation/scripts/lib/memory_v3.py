@@ -23,6 +23,12 @@ IGNORED_DIRS = {
     "output",
 }
 
+META_DIRS = {
+    ".automation",
+    ".project-memory",
+    ".claude",
+}
+
 CODE_EXTENSIONS = {
     ".ts",
     ".tsx",
@@ -394,6 +400,9 @@ def iter_code_files(
         for filename in files:
             path = root_path / filename
             relative_path = path.relative_to(repo_root).as_posix()
+            top_level = relative_path.split("/", 1)[0]
+            if top_level in META_DIRS and not path_matches_rules(relative_path, include_paths):
+                continue
             if include_paths and not path_matches_rules(relative_path, include_paths):
                 continue
             if exclude_paths and path_matches_rules(relative_path, exclude_paths):
@@ -640,6 +649,83 @@ def summary_from_text(text: str, limit: int = 3) -> list[str]:
     return lines
 
 
+def extract_section_text(text: str, heading: str) -> str:
+    sections = extract_sections(text)
+    return sections.get(heading.lower(), "").strip()
+
+
+def extract_section_bullets(text: str, heading: str) -> list[str]:
+    section = extract_section_text(text, heading)
+    if not section:
+        return []
+    items = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*+]\s+", "", line)
+        line = re.sub(r"^\d+\.\s+", "", line)
+        line = line.strip("` ")
+        if line:
+            items.append(line)
+    return items
+
+
+def extract_write_scope(text: str) -> list[str]:
+    metadata, _ = parse_frontmatter(text)
+    raw = metadata.get("write_scope")
+    items: list[str] = []
+    if isinstance(raw, list):
+        items.extend(str(item).strip() for item in raw if str(item).strip())
+    items.extend(extract_section_bullets(text, "Write-Scope"))
+    deduped = []
+    seen = set()
+    for item in items:
+        normalized = item.strip().strip("`")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return deduped
+
+
+def extract_open_findings(text: str) -> list[str]:
+    items = extract_section_bullets(text, "Open Findings")
+    if len(items) == 1 and items[0].lower() == "none":
+        return []
+    return items
+
+
+def extract_forbidden_moves(text: str) -> list[str]:
+    metadata, _ = parse_frontmatter(text)
+    raw = metadata.get("forbidden_moves")
+    items: list[str] = []
+    if isinstance(raw, list):
+        items.extend(str(item).strip() for item in raw if str(item).strip())
+    items.extend(extract_section_bullets(text, "Forbidden Moves"))
+    deduped = []
+    seen = set()
+    for item in items:
+        normalized = item.strip().strip("`")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return deduped
+
+
+def infer_current_branch(repo_root: Path) -> str:
+    try:
+        import subprocess
+
+        output = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+    return output or "unknown"
+
+
 def detect_verification(text: str) -> dict:
     lowered = text.lower()
     checks = {
@@ -647,7 +733,11 @@ def detect_verification(text: str) -> dict:
         "typecheck": "unknown",
         "lint": "unknown",
         "tests": "unknown",
+        "manual": "unknown",
+        "browser": "unknown",
+        "overall": "unknown",
     }
+    evidence = []
     for name in list(checks):
         if f"{name}: pass" in lowered or f"{name} passes" in lowered or f"{name} passed" in lowered:
             checks[name] = "pass"
@@ -655,6 +745,44 @@ def detect_verification(text: str) -> dict:
             checks[name] = "fail"
         elif "blocked" in lowered and name in lowered:
             checks[name] = "blocked"
+    verification_section = extract_section_text(text, "Verification")
+    for raw in verification_section.splitlines():
+        line = raw.strip()
+        lowered_line = line.lower()
+        if not line:
+            continue
+        if lowered_line.startswith("- `command:`") or lowered_line.startswith("- command:"):
+            evidence.append(line)
+        if lowered_line.startswith("- `result:`") or lowered_line.startswith("- result:"):
+            evidence.append(line)
+            if "pass" in lowered_line:
+                checks["overall"] = "pass"
+            elif "fail" in lowered_line:
+                checks["overall"] = "fail"
+            elif "blocked" in lowered_line:
+                checks["overall"] = "blocked"
+            elif "not-run" in lowered_line:
+                checks["overall"] = "not-run"
+        if "browser" in lowered_line and "pass" in lowered_line:
+            checks["browser"] = "pass"
+        elif "browser" in lowered_line and "fail" in lowered_line:
+            checks["browser"] = "fail"
+        elif "browser" in lowered_line and "blocked" in lowered_line:
+            checks["browser"] = "blocked"
+        if "manual" in lowered_line and "pass" in lowered_line:
+            checks["manual"] = "pass"
+        elif "manual" in lowered_line and "fail" in lowered_line:
+            checks["manual"] = "fail"
+        elif "manual" in lowered_line and "blocked" in lowered_line:
+            checks["manual"] = "blocked"
+    if checks["overall"] == "unknown":
+        if any(value == "fail" for key, value in checks.items() if key not in {"overall"}):
+            checks["overall"] = "fail"
+        elif any(value == "blocked" for key, value in checks.items() if key not in {"overall"}):
+            checks["overall"] = "blocked"
+        elif any(value == "pass" for key, value in checks.items() if key not in {"overall"}):
+            checks["overall"] = "pass"
+    checks["evidence"] = evidence[:8]
     return checks
 
 

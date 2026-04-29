@@ -12,9 +12,13 @@ sys.path.insert(0, str(SCRIPT_DIR / "lib"))
 
 from memory_v3 import (  # noqa: E402
     detect_verification,
+    extract_forbidden_moves,
     extract_decisions,
     extract_issue_triplets,
+    extract_open_findings,
     extract_pattern_entries,
+    extract_write_scope,
+    infer_current_branch,
     markdown_list,
     now_utc_date,
     render_template,
@@ -27,7 +31,7 @@ from memory_v3 import (  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract candidate Memory V3 artifacts from session artifacts.")
+    parser = argparse.ArgumentParser(description="Extract candidate Memory Core artifacts from session artifacts.")
     parser.add_argument("--project", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--task-type", required=True)
@@ -52,7 +56,12 @@ def changed_files(repo_root: Path) -> list[str]:
     files = []
     for line in output.splitlines():
         if len(line) > 3:
-            files.append(line[3:])
+            candidate = line[3:]
+            if "__pycache__" in candidate or candidate.endswith(".pyc"):
+                continue
+            if candidate.startswith(".automation/workspace/"):
+                continue
+            files.append(candidate)
     return files
 
 
@@ -73,7 +82,11 @@ def main() -> int:
     decisions = extract_decisions(combined_text)
     failures = extract_issue_triplets(combined_text)
     patterns = extract_pattern_entries(combined_text)
+    write_scope = extract_write_scope(combined_text)
+    forbidden_moves = extract_forbidden_moves(combined_text)
+    open_findings = extract_open_findings(combined_text)
     files_touched = changed_files(repo_root)
+    branch = args.branch or infer_current_branch(repo_root)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     patterns_dir = output_dir / "patterns"
@@ -173,7 +186,7 @@ def main() -> int:
             "date": args.date,
             "last_seen_at": args.date,
             "repo": str(repo_root),
-            "branch": args.branch or "unknown",
+            "branch": branch,
             "outcome": "candidate",
             "verification_json": json.dumps(verification, ensure_ascii=False),
             "files_touched_json": json.dumps(files_touched, ensure_ascii=False),
@@ -181,11 +194,23 @@ def main() -> int:
             "related_failures_json": json.dumps([item["title"] for item in created_failures], ensure_ascii=False),
             "related_decisions_json": json.dumps([item["title"] for item in created_decisions], ensure_ascii=False),
             "next_retrieval_hints_json": json.dumps(summaries[:3], ensure_ascii=False),
+            "write_scope_json": json.dumps(write_scope, ensure_ascii=False),
+            "open_findings_json": json.dumps(open_findings, ensure_ascii=False),
             "title": title,
             "summary": markdown_list(summaries),
+            "write_scope": markdown_list(write_scope),
+            "verification_summary": markdown_list(
+                [
+                    f"{name}: {value}"
+                    for name, value in verification.items()
+                    if name != "evidence" and value != "unknown"
+                ],
+                empty="- No concrete verification evidence captured.",
+            ),
             "decisions": markdown_list([item["title"] for item in created_decisions]),
             "failures": markdown_list([item["title"] for item in created_failures]),
             "reuse_signals": markdown_list([item["title"] for item in created_patterns]),
+            "open_findings": markdown_list(open_findings),
             "next_hints": markdown_list(summaries[:3]),
         },
     )
@@ -198,18 +223,24 @@ def main() -> int:
         "task_type": args.task_type,
         "date": args.date,
         "repo_root": str(repo_root),
+        "input_paths": [str(Path(input_path).resolve()) for input_path in args.input],
+        "branch": branch,
         "session_capsule": str(session_path),
         "patterns": created_patterns,
         "failures": created_failures,
         "decisions": created_decisions,
         "repo_canon_updates": [],
         "verification": verification,
+        "write_scope": write_scope,
+        "forbidden_moves": forbidden_moves,
+        "open_findings": open_findings,
+        "files_touched": files_touched,
     }
     write_json(output_dir / "manifest.json", manifest)
 
     report = "\n".join(
         [
-            "# Memory Candidate Extraction",
+            "# Memory Core Candidate Extraction",
             "",
             f"- Task: `{args.task_id}`",
             f"- Session capsule: `{session_path}`",
