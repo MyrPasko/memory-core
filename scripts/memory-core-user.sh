@@ -37,6 +37,7 @@ Examples:
   memory-core-user doctor
   memory-core-user doctor --repo /absolute/path/to/worktree
   memory-core-user attach --repo /absolute/path/to/worktree
+  memory-core-user attach --repo /absolute/path/to/worktree --claude-mode merge
   memory-core-user status --repo /absolute/path/to/worktree
   memory-core-user detach --repo /absolute/path/to/worktree
 EOF
@@ -184,10 +185,26 @@ metadata_path_for() {
   printf '%s\n' "$state_root/metadata.json"
 }
 
+claude_manifest_path_for() {
+  local state_root="$1"
+  printf '%s\n' "$state_root/claude-merge-manifest.env"
+}
+
 metadata_value() {
   local metadata="$1"
   local key="$2"
   sed -n "s/.*\"$key\": \"\\(.*\\)\".*/\\1/p" "$metadata" | head -n 1
+}
+
+claude_manifest_value() {
+  local manifest="$1"
+  local key="$2"
+  sed -n "s/^$key=//p" "$manifest" | head -n 1
+}
+
+claude_manifest_entries() {
+  local manifest="$1"
+  sed -n 's/^entry=//p' "$manifest"
 }
 
 metadata_is_attached() {
@@ -305,6 +322,166 @@ has_exclude_block() {
   [[ -f "$exclude_file" ]] && grep -Fqx "$begin_marker" "$exclude_file"
 }
 
+normalize_claude_mode() {
+  local raw="${1:-mount}"
+  case "$raw" in
+    mount|merge)
+      printf '%s\n' "$raw"
+      ;;
+    *)
+      echo "Unsupported claude mode: $raw" >&2
+      exit 1
+      ;;
+  esac
+}
+
+claude_mode_from_state() {
+  local state_root="$1"
+  local metadata
+  metadata="$(metadata_path_for "$state_root")"
+  if [[ -f "$metadata" ]]; then
+    local value
+    value="$(metadata_value "$metadata" "claude_mode")"
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+ensure_managed_file_symlink() {
+  local target="$1"
+  local link_path="$2"
+  local repo_id="$3"
+  if [[ -L "$link_path" ]]; then
+    local current
+    current="$(readlink "$link_path")"
+    if [[ "$current" == "$target" ]]; then
+      return 0
+    fi
+    if is_managed_target "$current" "$repo_id"; then
+      rm "$link_path"
+    else
+      echo "Attach is unsafe: existing symlink is not the expected managed entry: $link_path -> $current" >&2
+      exit 1
+    fi
+  elif [[ -e "$link_path" ]]; then
+    echo "Attach is unsafe: existing path would conflict with a managed Claude agent entry: $link_path" >&2
+    exit 1
+  fi
+  ensure_parent "$link_path"
+  ln -s "$target" "$link_path"
+}
+
+write_claude_merge_manifest() {
+  local state_root="$1"
+  local root_created="$2"
+  local agents_dir_created="$3"
+  shift 3
+  local manifest
+  manifest="$(claude_manifest_path_for "$state_root")"
+  {
+    printf 'mode=merge\n'
+    printf 'root_created=%s\n' "$root_created"
+    printf 'agents_dir_created=%s\n' "$agents_dir_created"
+    local entry
+    for entry in "$@"; do
+      printf 'entry=%s\n' "$entry"
+    done
+  } >"$manifest"
+}
+
+attach_claude_merge() {
+  local repo_root="$1"
+  local state_root="$2"
+  local repo_id="$3"
+  local claude_root="$repo_root/.claude"
+  local agents_root="$claude_root/agents"
+  local manifest
+  local root_created="false"
+  local agents_dir_created="false"
+  local existing_root_created=""
+  local existing_agents_dir_created=""
+  local entries=()
+  local target
+  local rel_path
+  local link_path
+  local basename_path
+
+  manifest="$(claude_manifest_path_for "$state_root")"
+  if [[ -f "$manifest" ]]; then
+    existing_root_created="$(claude_manifest_value "$manifest" "root_created")"
+    existing_agents_dir_created="$(claude_manifest_value "$manifest" "agents_dir_created")"
+  fi
+
+  if [[ -e "$claude_root" && ! -d "$claude_root" ]]; then
+    echo "Attach is unsafe: merge mode requires .claude to be a directory when it already exists: $claude_root" >&2
+    exit 1
+  fi
+  if [[ ! -e "$claude_root" ]]; then
+    mkdir -p "$claude_root"
+    root_created="true"
+  elif [[ "$existing_root_created" == "true" ]]; then
+    root_created="true"
+  fi
+
+  if [[ -L "$agents_root" ]]; then
+    echo "Attach is unsafe: merge mode requires .claude/agents to be a real directory, not a symlink: $agents_root" >&2
+    exit 1
+  fi
+  if [[ -e "$agents_root" && ! -d "$agents_root" ]]; then
+    echo "Attach is unsafe: merge mode requires .claude/agents to be a directory when it already exists: $agents_root" >&2
+    exit 1
+  fi
+  if [[ ! -e "$agents_root" ]]; then
+    mkdir -p "$agents_root"
+    agents_dir_created="true"
+  elif [[ "$existing_agents_dir_created" == "true" ]]; then
+    agents_dir_created="true"
+  fi
+
+  for target in "$CORE_ROOT/.claude/agents/"*.md; do
+    basename_path="$(basename "$target")"
+    rel_path=".claude/agents/$basename_path"
+    link_path="$repo_root/$rel_path"
+    ensure_managed_file_symlink "$state_root/.claude/agents/$basename_path" "$link_path" "$repo_id"
+    entries+=("$rel_path")
+  done
+
+  write_claude_merge_manifest "$state_root" "$root_created" "$agents_dir_created" "${entries[@]}"
+}
+
+detach_claude_merge() {
+  local repo_root="$1"
+  local state_root="$2"
+  local manifest
+  local agents_dir_created="false"
+  local root_created="false"
+  local entry
+
+  manifest="$(claude_manifest_path_for "$state_root")"
+  if [[ ! -f "$manifest" ]]; then
+    return 0
+  fi
+
+  agents_dir_created="$(claude_manifest_value "$manifest" "agents_dir_created")"
+  root_created="$(claude_manifest_value "$manifest" "root_created")"
+
+  while IFS= read -r entry; do
+    if [[ -L "$repo_root/$entry" ]]; then
+      rm "$repo_root/$entry"
+    fi
+  done < <(claude_manifest_entries "$manifest")
+
+  if [[ "$agents_dir_created" == "true" ]]; then
+    rmdir "$repo_root/.claude/agents" 2>/dev/null || true
+  fi
+  if [[ "$root_created" == "true" ]]; then
+    rmdir "$repo_root/.claude" 2>/dev/null || true
+  fi
+}
+
 DOCTOR_ISSUES=()
 
 doctor_reset() {
@@ -341,6 +518,10 @@ doctor_repo_surface() {
   local common_exclude
   local state_root
   local managed_link_count=0
+  local claude_mode="unknown"
+  local claude_manifest
+  local claude_status="missing"
+  local claude_entry_count=0
   local rel_path
   local link_path
   local link_target
@@ -359,6 +540,25 @@ doctor_repo_surface() {
   if [[ -n "$attached_state_root" ]]; then
     state_root="$attached_state_root"
   fi
+  if [[ -n "$attached_state_root" ]]; then
+    claude_mode="$(claude_mode_from_state "$attached_state_root" || true)"
+  fi
+  if [[ -z "$claude_mode" || "$claude_mode" == "unknown" ]]; then
+    if [[ -L "$repo_root/.claude" ]]; then
+      link_target="$(readlink "$repo_root/.claude")"
+      if is_managed_target "$link_target" "$repo_id"; then
+        claude_mode="mount"
+      fi
+    elif [[ -d "$repo_root/.claude" ]]; then
+      claude_manifest="$(claude_manifest_path_for "$state_root")"
+      if [[ -f "$claude_manifest" ]]; then
+        claude_mode="$(claude_manifest_value "$claude_manifest" "mode")"
+      fi
+    fi
+  fi
+  if [[ -z "$claude_mode" ]]; then
+    claude_mode="unknown"
+  fi
 
   printf 'doctor_scope=repo\n'
   printf 'repo_root=%s\n' "$repo_root"
@@ -368,6 +568,7 @@ doctor_repo_surface() {
   printf 'core_root=%s\n' "$CORE_ROOT"
   printf 'candidate_state_root=%s\n' "$candidate_state_root"
   printf 'attached_state_root=%s\n' "$(if [[ -n "$attached_state_root" ]]; then printf '%s' "$attached_state_root"; else printf 'missing'; fi)"
+  printf 'claude_mode=%s\n' "$claude_mode"
   printf 'metadata_path=%s\n' "$(metadata_path_for "$state_root")"
   printf 'worktree_exclude=%s\n' "$worktree_exclude"
   printf 'common_exclude=%s\n' "$common_exclude"
@@ -388,7 +589,7 @@ doctor_repo_surface() {
     doctor_add_issue "missing operator CLI: $CORE_ROOT/.automation/scripts/aira-memory"
   fi
 
-  for rel_path in "AGENTS.md" ".project-memory" ".automation" ".claude"; do
+  for rel_path in "AGENTS.md" ".project-memory" ".automation"; do
     link_path="$repo_root/$rel_path"
     status="missing"
     if [[ -L "$link_path" ]]; then
@@ -412,9 +613,80 @@ doctor_repo_surface() {
     printf '%s=%s\n' "${rel_path//\//_}_status" "$status"
   done
 
-  if [[ "$managed_link_count" -gt 0 && "$managed_link_count" -lt 4 ]]; then
-    doctor_add_issue "partial managed attachment surface: found $managed_link_count of 4 required managed links"
+  if [[ "$managed_link_count" -gt 0 && "$managed_link_count" -lt 3 ]]; then
+    doctor_add_issue "partial managed attachment surface: found $managed_link_count of 3 required managed root links"
   fi
+
+  if [[ "$claude_mode" == "mount" ]]; then
+    if [[ -L "$repo_root/.claude" ]]; then
+      link_target="$(readlink "$repo_root/.claude")"
+      if is_managed_target "$link_target" "$repo_id"; then
+        if [[ -e "$link_target" ]]; then
+          claude_status="managed-mount"
+        else
+          claude_status="managed-mount-broken"
+          doctor_add_issue "broken managed .claude mount: $repo_root/.claude -> $link_target"
+        fi
+      else
+        claude_status="foreign-symlink"
+        doctor_add_issue "foreign .claude symlink blocks V5 attachment: $link_target"
+      fi
+    elif [[ -e "$repo_root/.claude" ]]; then
+      claude_status="repo-owned"
+      doctor_add_issue "attached repo expects a managed .claude mount, but found a repo-owned path instead"
+    fi
+  elif [[ "$claude_mode" == "merge" ]]; then
+    claude_manifest="$(claude_manifest_path_for "$state_root")"
+    if [[ -L "$repo_root/.claude" ]]; then
+      claude_status="foreign-symlink"
+      doctor_add_issue "merge mode requires .claude to remain a repo-owned directory, not a symlink"
+    elif [[ -d "$repo_root/.claude" ]]; then
+      claude_status="managed-merge"
+    elif [[ -e "$repo_root/.claude" ]]; then
+      claude_status="repo-owned-non-directory"
+      doctor_add_issue "merge mode requires .claude to be a directory"
+    fi
+    if [[ ! -f "$claude_manifest" ]]; then
+      doctor_add_issue "merge mode is missing its managed Claude manifest: $claude_manifest"
+    else
+      while IFS= read -r rel_path; do
+        claude_entry_count=$((claude_entry_count + 1))
+        link_path="$repo_root/$rel_path"
+        if [[ ! -L "$link_path" ]]; then
+          doctor_add_issue "merge mode is missing a managed Claude agent symlink: $rel_path"
+          continue
+        fi
+        link_target="$(readlink "$link_path")"
+        if ! is_managed_target "$link_target" "$repo_id"; then
+          doctor_add_issue "managed Claude agent entry points at a foreign target: $rel_path -> $link_target"
+          continue
+        fi
+        if [[ ! -e "$link_target" ]]; then
+          doctor_add_issue "managed Claude agent entry is broken: $rel_path -> $link_target"
+        fi
+      done < <(claude_manifest_entries "$claude_manifest")
+      if [[ "$claude_entry_count" -eq 0 ]]; then
+        doctor_add_issue "merge mode Claude manifest contains no managed agent entries"
+      fi
+    fi
+  else
+    if [[ -L "$repo_root/.claude" ]]; then
+      link_target="$(readlink "$repo_root/.claude")"
+      if is_managed_target "$link_target" "$repo_id"; then
+        claude_status="managed-mount-without-mode"
+        doctor_add_issue "managed .claude mount exists but no Claude mode was recorded in metadata"
+      else
+        claude_status="foreign-symlink"
+        doctor_add_issue "foreign .claude symlink blocks V5 attachment: $link_target"
+      fi
+    elif [[ -d "$repo_root/.claude" ]]; then
+      claude_status="repo-owned-or-mergeable"
+    elif [[ -e "$repo_root/.claude" ]]; then
+      claude_status="repo-owned-non-directory"
+      doctor_add_issue ".claude exists but is not a directory or managed symlink"
+    fi
+  fi
+  printf '.claude_status=%s\n' "$claude_status"
 
   if [[ -n "$attached_state_root" ]]; then
     if [[ ! -f "$attached_state_root/metadata.json" ]]; then
@@ -448,6 +720,9 @@ doctor_repo_surface() {
     fi
     if [[ ! -d "$attached_state_root/.claude" ]]; then
       doctor_add_issue "attached state is missing agents surface: $attached_state_root/.claude"
+    fi
+    if [[ "$(metadata_value "$attached_state_root/metadata.json" "claude_mode")" != "$claude_mode" ]]; then
+      doctor_add_issue "metadata claude_mode mismatch for $attached_state_root/metadata.json"
     fi
     if ! has_exclude_block "$worktree_exclude"; then
       doctor_add_issue "attached worktree is missing the managed exclude block: $worktree_exclude"
@@ -522,10 +797,11 @@ doctor_home_surface() {
 preflight_attach() {
   local repo_root="$1"
   local desired_state_root="$2"
+  local claude_mode="$3"
   local repo_id
   repo_id="$(repo_id_for "$repo_root")"
 
-  for rel_path in "AGENTS.md" ".project-memory" ".automation" ".claude"; do
+  for rel_path in "AGENTS.md" ".project-memory" ".automation"; do
     local abs_path="$repo_root/$rel_path"
     if git_is_tracked "$repo_root" "$rel_path"; then
       echo "Attach is unsafe: tracked repo path already exists in git index: $rel_path" >&2
@@ -545,6 +821,47 @@ preflight_attach() {
       exit 1
     fi
   done
+
+  local claude_root="$repo_root/.claude"
+  if [[ "$claude_mode" == "mount" ]]; then
+    if git_is_tracked "$repo_root" ".claude"; then
+      echo "Attach is unsafe: tracked repo path already exists in git index: .claude" >&2
+      exit 1
+    fi
+    if [[ -L "$claude_root" ]]; then
+      local current_target
+      current_target="$(readlink "$claude_root")"
+      if ! is_managed_target "$current_target" "$repo_id"; then
+        echo "Attach is unsafe: .claude is a symlink not managed by Memory Core V5: $current_target" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if [[ -e "$claude_root" ]]; then
+      echo "Attach is unsafe: repo already owns path .claude. Use --claude-mode merge to keep an existing .claude directory." >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  if [[ -L "$claude_root" ]]; then
+    local current_target
+    current_target="$(readlink "$claude_root")"
+    if is_managed_target "$current_target" "$repo_id"; then
+      echo "Attach is unsafe: merge mode cannot reuse a managed .claude mount. Detach first or keep mount mode." >&2
+      exit 1
+    fi
+    echo "Attach is unsafe: merge mode requires .claude to be a real directory, not a foreign symlink: $current_target" >&2
+    exit 1
+  fi
+  if [[ -e "$claude_root" && ! -d "$claude_root" ]]; then
+    echo "Attach is unsafe: merge mode requires .claude to be a directory when it already exists." >&2
+    exit 1
+  fi
+  if [[ -L "$claude_root/agents" ]]; then
+    echo "Attach is unsafe: merge mode requires .claude/agents to be a real directory, not a symlink." >&2
+    exit 1
+  fi
 }
 
 render_state_files() {
@@ -745,6 +1062,7 @@ EOF
 write_metadata() {
   local repo_root="$1"
   local state_root="$2"
+  local claude_mode="$3"
   local repo_id
   local worktree_id
   repo_id="$(repo_id_for "$repo_root")"
@@ -760,6 +1078,7 @@ write_metadata() {
   "common_git_dir": "$(printf '%s' "$(git_common_dir "$repo_root")")",
   "git_dir": "$(printf '%s' "$(git_dir_path "$repo_root")")",
   "branch": "$(printf '%s' "$(git_branch_name "$repo_root")")",
+  "claude_mode": "$(printf '%s' "$claude_mode")",
   "attached_at": "$(date +%FT%T%z)"
 }
 EOF
@@ -767,6 +1086,8 @@ EOF
 
 attach_repo() {
   local repo_arg="$1"
+  local claude_mode
+  claude_mode="$(normalize_claude_mode "${2:-mount}")"
   require_core
   local repo_root
   local state_root
@@ -776,20 +1097,26 @@ attach_repo() {
     state_root="$(state_root_for "$repo_root")"
   fi
 
-  preflight_attach "$repo_root" "$state_root"
+  preflight_attach "$repo_root" "$state_root" "$claude_mode"
 
   render_state_files "$repo_root" "$state_root"
-  write_metadata "$repo_root" "$state_root"
+  write_metadata "$repo_root" "$state_root" "$claude_mode"
 
   ensure_symlink "$state_root/AGENTS.md" "$repo_root/AGENTS.md"
   ensure_symlink "$state_root/.project-memory" "$repo_root/.project-memory"
   ensure_symlink "$state_root/.automation" "$repo_root/.automation"
-  ensure_symlink "$state_root/.claude" "$repo_root/.claude"
+  if [[ "$claude_mode" == "mount" ]]; then
+    rm -f "$(claude_manifest_path_for "$state_root")"
+    ensure_symlink "$state_root/.claude" "$repo_root/.claude"
+  else
+    attach_claude_merge "$repo_root" "$state_root" "$(repo_id_for "$repo_root")"
+  fi
   ensure_git_exclude "$repo_root"
 
   cat <<EOF
 attached_repo=$repo_root
 state_root=$state_root
+claude_mode=$claude_mode
 controller_agent=$repo_root/.claude/agents/aira-controller.md
 operator_cli=$repo_root/.automation/scripts/aira-memory
 EOF
@@ -798,9 +1125,21 @@ EOF
 detach_repo() {
   local repo_arg="$1"
   local repo_root
+  local state_root
+  local claude_mode=""
   repo_root="$(git_top "$repo_arg")"
+  state_root="$(managed_state_root_from_repo "$repo_root" || true)"
+  if [[ -z "$state_root" ]]; then
+    state_root="$(state_root_for "$repo_root")"
+  fi
+  claude_mode="$(claude_mode_from_state "$state_root" || true)"
   remove_git_exclude "$repo_root"
-  for path in "$repo_root/AGENTS.md" "$repo_root/.project-memory" "$repo_root/.automation" "$repo_root/.claude"; do
+  if [[ "$claude_mode" == "merge" ]]; then
+    detach_claude_merge "$repo_root" "$state_root"
+  elif [[ -L "$repo_root/.claude" ]]; then
+    rm "$repo_root/.claude"
+  fi
+  for path in "$repo_root/AGENTS.md" "$repo_root/.project-memory" "$repo_root/.automation"; do
     if [[ -L "$path" ]]; then
       rm "$path"
     fi
@@ -813,11 +1152,16 @@ status_repo() {
   local repo_root
   local attached_state_root
   local state_root
+  local claude_mode
   repo_root="$(git_top "$repo_arg")"
   attached_state_root="$(managed_state_root_from_repo "$repo_root" || true)"
   state_root="$attached_state_root"
   if [[ -z "$state_root" ]]; then
     state_root="$(state_root_for "$repo_root")"
+  fi
+  claude_mode="$(claude_mode_from_state "$state_root" || true)"
+  if [[ -z "$claude_mode" ]]; then
+    claude_mode="unknown"
   fi
   cat <<EOF
 repo_root=$repo_root
@@ -826,7 +1170,9 @@ worktree_id=$(worktree_id_for "$repo_root")
 branch=$(git_branch_name "$repo_root")
 state_root=$state_root
 attached_state_root=$(if [[ -n "$attached_state_root" ]]; then printf '%s' "$attached_state_root"; else printf 'missing'; fi)
+claude_mode=$claude_mode
 agents_link=$(if [[ -L "$repo_root/.claude" ]]; then readlink "$repo_root/.claude"; else printf 'missing'; fi)
+agents_dir=$(if [[ -d "$repo_root/.claude/agents" ]]; then printf '%s' "$repo_root/.claude/agents"; else printf 'missing'; fi)
 automation_link=$(if [[ -L "$repo_root/.automation" ]]; then readlink "$repo_root/.automation"; else printf 'missing'; fi)
 project_memory_link=$(if [[ -L "$repo_root/.project-memory" ]]; then readlink "$repo_root/.project-memory"; else printf 'missing'; fi)
 bootstrap_link=$(if [[ -L "$repo_root/AGENTS.md" ]]; then readlink "$repo_root/AGENTS.md"; else printf 'missing'; fi)
@@ -915,11 +1261,29 @@ shift
 
 case "$command" in
   attach)
-    if [[ "${1:-}" != "--repo" || $# -lt 2 ]]; then
+    attach_repo_path=""
+    attach_claude_mode="mount"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo)
+          attach_repo_path="${2:?missing value for --repo}"
+          shift 2
+          ;;
+        --claude-mode)
+          attach_claude_mode="${2:?missing value for --claude-mode}"
+          shift 2
+          ;;
+        *)
+          echo "attach accepts --repo <path> and optional --claude-mode <mount|merge>" >&2
+          exit 1
+          ;;
+      esac
+    done
+    if [[ -z "$attach_repo_path" ]]; then
       echo "attach requires --repo <path>" >&2
       exit 1
     fi
-    attach_repo "$2"
+    attach_repo "$attach_repo_path" "$attach_claude_mode"
     ;;
   detach)
     if [[ "${1:-}" != "--repo" || $# -lt 2 ]]; then

@@ -9,7 +9,7 @@
 - Reattach preserves curated per-worktree state instead of reseeding it.
 - Multi-worktree attachment under one git common dir is supported and smoke-tested.
 - `memory-core-user doctor` diagnoses missing core assets, broken managed links, metadata drift, and half-detached repos.
-- A disposable regression script now covers source install, bundle install, doctor, multi-worktree attach, branch rename stability, structured closeout, prune, and conflict refusal.
+- A disposable regression script now covers source install, bundle install, doctor, multi-worktree attach, branch rename stability, structured closeout, prune, conflict refusal, and merge-mode coexistence with repo-owned `.claude`.
 
 ## Must Fix Before Production
 
@@ -22,8 +22,14 @@
 - Normalize legacy `memory-v3` naming in internal paths and module names.
 - Add a richer human-readable registry view for many attached projects and worktrees.
 - Add stricter automated regression coverage around parser edge cases and promotion/audit workflows.
+- Add optional V5 skill-sync support that complements merge-mode `.claude` coexistence without overwriting repo-owned skill surfaces.
 
 ## Completed Hardening Slice
 
 - Add `doctor`-style diagnostics for broken symlinks, half-detached repos, and missing core assets.
 - Add a repeatable disposable regression harness for V5 source install, built-bundle install, multi-worktree attach, closeout, prune, and conflict behavior.
+
+## Completed Claude Coexistence Slice
+
+- Add `attach --claude-mode merge` so user-level V5 can coexist with an existing repo-owned `/.claude` directory.
+- Track and detach only managed Aira agent entries in merge mode instead of replacing the entire repo-owned `/.claude` surface.

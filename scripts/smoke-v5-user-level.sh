@@ -242,6 +242,42 @@ if "$SRC_LAUNCHER" attach --repo "$CONFLICT_REPO" >/tmp/memory-core-v5-conflict.
 fi
 assert_contains "$(cat /tmp/memory-core-v5-conflict.err)" "tracked repo path already exists in git index: AGENTS.md"
 
+step claude-merge-mode
+MERGE_REPO="$TMP_DIR/merge-repo"
+mkdir -p "$MERGE_REPO/.claude/agents" "$MERGE_REPO/.claude/skills"
+git -C "$MERGE_REPO" init -b main >/dev/null
+printf 'merge\n' > "$MERGE_REPO/README.md"
+printf 'custom-agent\n' > "$MERGE_REPO/.claude/agents/custom-agent.md"
+printf 'custom-skill\n' > "$MERGE_REPO/.claude/skills/custom-skill.md"
+git -C "$MERGE_REPO" add README.md .claude/agents/custom-agent.md .claude/skills/custom-skill.md
+git -C "$MERGE_REPO" -c user.name=Aira -c user.email=aira@example.com commit -m init >/dev/null
+"$SRC_LAUNCHER" attach --repo "$MERGE_REPO" --claude-mode merge >/dev/null
+MERGE_STATUS="$("$SRC_LAUNCHER" status --repo "$MERGE_REPO")"
+MERGE_DOCTOR="$("$SRC_LAUNCHER" doctor --repo "$MERGE_REPO")"
+assert_contains "$MERGE_STATUS" "claude_mode=merge"
+assert_contains "$MERGE_DOCTOR" "overall=ok"
+if [[ ! -f "$MERGE_REPO/.claude/agents/custom-agent.md" ]]; then
+  echo "Merge mode should preserve existing custom Claude agents" >&2
+  exit 1
+fi
+if [[ ! -f "$MERGE_REPO/.claude/skills/custom-skill.md" ]]; then
+  echo "Merge mode should preserve existing custom Claude skills" >&2
+  exit 1
+fi
+if [[ ! -L "$MERGE_REPO/.claude/agents/aira-controller.md" ]]; then
+  echo "Merge mode should install managed Aira agent symlinks under .claude/agents" >&2
+  exit 1
+fi
+"$SRC_LAUNCHER" detach --repo "$MERGE_REPO" >/dev/null
+if [[ ! -f "$MERGE_REPO/.claude/agents/custom-agent.md" ]]; then
+  echo "Detach should not remove repo-owned Claude agents" >&2
+  exit 1
+fi
+if [[ -e "$MERGE_REPO/.claude/agents/aira-controller.md" ]]; then
+  echo "Detach should remove only the managed Aira merge-mode entries" >&2
+  exit 1
+fi
+
 step bundle-install-attach-smoke
 BUNDLE_REPO="$TMP_DIR/bundle-repo"
 mkdir -p "$BUNDLE_REPO"

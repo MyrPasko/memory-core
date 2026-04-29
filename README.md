@@ -82,12 +82,16 @@ Identity rules:
 - the logical project name comes from the base repository, not from the individual worktree folder name
 - reattaching an existing worktree preserves curated state instead of reseeding it
 
-When you attach a repo or worktree, V5 mounts these repo paths as symlinks:
+When you attach a repo or worktree, V5 always mounts these repo paths as symlinks:
 
 - `AGENTS.md`
 - `/.project-memory`
 - `/.automation`
-- `/.claude`
+
+For `/.claude`, V5 has two modes:
+
+- default `mount` mode mounts `/.claude` itself as a managed symlink
+- `merge` mode keeps an existing repo-owned `/.claude` directory and only adds managed Aira agent symlinks under `/.claude/agents/`
 
 It also adds those paths to `.git/info/exclude`, so they stay out of git.
 On detach, the managed ignore block is removed again. If another attached worktree for the same repo still exists, the shared common-dir ignore block is preserved until the last attachment is detached.
@@ -108,6 +112,7 @@ Optional install location overrides:
 
 ```sh
 memory-core-user attach --repo /absolute/path/to/worktree
+memory-core-user attach --repo /absolute/path/to/worktree --claude-mode merge
 ```
 
 Then use the same repo-local workflow from inside that attached worktree:
@@ -133,9 +138,14 @@ memory-core-user prune --apply
 `memory-core-user list` reports only currently attached worktrees.
 `memory-core-user prune` shows stale detached state directories; `--apply` removes them.
 
+Use `--claude-mode merge` when the repository already owns a real `/.claude` directory with existing agents, rules, or skills that must stay in place.
+In merge mode, Memory Core preserves repo-owned `/.claude` content and adds only managed Aira agent symlinks under `/.claude/agents/`.
+
 Attach is intentionally conservative:
 
-- it refuses repos that already track `AGENTS.md`, `/.project-memory`, `/.automation`, or `/.claude`
+- it refuses repos that already track `AGENTS.md`, `/.project-memory`, or `/.automation`
+- in default `mount` mode it also refuses repos that already own `/.claude`
+- in `merge` mode it preserves an existing repo-owned `/.claude` directory, but refuses conflicting `aira-*.md` agent entries or foreign symlink-based `.claude` layouts
 - it refuses conflicting existing non-managed paths or foreign symlinks
 - it is meant for local repos or worktrees that do not already own this surface
 
@@ -147,6 +157,7 @@ Use V5 when:
 - you want one user-level core install
 - you do not want to push `AGENTS.md`, `/.project-memory`, `/.automation`, or `/.claude` into git
 - you still want isolated active state per worktree
+- you may need `--claude-mode merge` to coexist with an existing repo-owned `/.claude` directory
 
 ## Build A Bundle Manually
 
