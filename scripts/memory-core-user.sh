@@ -28,11 +28,14 @@ Commands:
   attach    Attach Memory Core V5 to a git repo or worktree without committing memory files
   detach    Remove managed symlinks from a git repo or worktree
   status    Show the managed state for a repo or worktree
+  doctor    Diagnose Memory Core V5 install or repo attachment problems
   list      List known attached repos and worktrees
   prune     Remove stale detached state directories from the user-level registry
   help      Show this help
 
 Examples:
+  memory-core-user doctor
+  memory-core-user doctor --repo /absolute/path/to/worktree
   memory-core-user attach --repo /absolute/path/to/worktree
   memory-core-user status --repo /absolute/path/to/worktree
   memory-core-user detach --repo /absolute/path/to/worktree
@@ -201,6 +204,11 @@ metadata_is_attached() {
   [[ -n "$actual_state_root" && "$actual_state_root" == "$expected_state_root" ]]
 }
 
+metadata_exists_for_repo() {
+  local repo_root="$1"
+  [[ -f "$(state_root_for "$repo_root")/metadata.json" ]]
+}
+
 cleanup_empty_registry_dirs() {
   local state_root="$1"
   local worktrees_dir
@@ -289,6 +297,226 @@ remove_git_exclude() {
   if ! repo_has_other_attached_worktrees "$repo_root"; then
     remove_exclude_block "$common_exclude"
   fi
+}
+
+has_exclude_block() {
+  local exclude_file="$1"
+  local begin_marker="# memory-core-v5 begin"
+  [[ -f "$exclude_file" ]] && grep -Fqx "$begin_marker" "$exclude_file"
+}
+
+DOCTOR_ISSUES=()
+
+doctor_reset() {
+  DOCTOR_ISSUES=()
+}
+
+doctor_add_issue() {
+  DOCTOR_ISSUES+=("$1")
+}
+
+doctor_print() {
+  local issue_count="${#DOCTOR_ISSUES[@]}"
+  printf 'issue_count=%s\n' "$issue_count"
+  if [[ "$issue_count" -eq 0 ]]; then
+    printf 'overall=ok\n'
+    return 0
+  fi
+  printf 'overall=issues-found\n'
+  local issue
+  for issue in "${DOCTOR_ISSUES[@]}"; do
+    printf 'issue=%s\n' "$issue"
+  done
+  return 1
+}
+
+doctor_repo_surface() {
+  local repo_root="$1"
+  local repo_id
+  local candidate_state_root
+  local attached_state_root
+  local git_dir
+  local common_dir
+  local worktree_exclude
+  local common_exclude
+  local state_root
+  local managed_link_count=0
+  local rel_path
+  local link_path
+  local link_target
+  local status
+
+  doctor_reset
+
+  repo_id="$(repo_id_for "$repo_root")"
+  candidate_state_root="$(state_root_for "$repo_root")"
+  attached_state_root="$(managed_state_root_from_repo "$repo_root" || true)"
+  git_dir="$(git_dir_path "$repo_root")"
+  common_dir="$(git_common_dir "$repo_root")"
+  worktree_exclude="$git_dir/info/exclude"
+  common_exclude="$common_dir/info/exclude"
+  state_root="$candidate_state_root"
+  if [[ -n "$attached_state_root" ]]; then
+    state_root="$attached_state_root"
+  fi
+
+  printf 'doctor_scope=repo\n'
+  printf 'repo_root=%s\n' "$repo_root"
+  printf 'repo_id=%s\n' "$repo_id"
+  printf 'worktree_id=%s\n' "$(worktree_id_for "$repo_root")"
+  printf 'branch=%s\n' "$(git_branch_name "$repo_root")"
+  printf 'core_root=%s\n' "$CORE_ROOT"
+  printf 'candidate_state_root=%s\n' "$candidate_state_root"
+  printf 'attached_state_root=%s\n' "$(if [[ -n "$attached_state_root" ]]; then printf '%s' "$attached_state_root"; else printf 'missing'; fi)"
+  printf 'metadata_path=%s\n' "$(metadata_path_for "$state_root")"
+  printf 'worktree_exclude=%s\n' "$worktree_exclude"
+  printf 'common_exclude=%s\n' "$common_exclude"
+
+  if [[ ! -d "$CORE_ROOT/.project-memory" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.project-memory"
+  fi
+  if [[ ! -d "$CORE_ROOT/.automation" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.automation"
+  fi
+  if [[ ! -d "$CORE_ROOT/.claude" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.claude"
+  fi
+  if [[ ! -f "$CORE_ROOT/.claude/agents/aira-controller.md" ]]; then
+    doctor_add_issue "missing controller agent: $CORE_ROOT/.claude/agents/aira-controller.md"
+  fi
+  if [[ ! -f "$CORE_ROOT/.automation/scripts/aira-memory" ]]; then
+    doctor_add_issue "missing operator CLI: $CORE_ROOT/.automation/scripts/aira-memory"
+  fi
+
+  for rel_path in "AGENTS.md" ".project-memory" ".automation" ".claude"; do
+    link_path="$repo_root/$rel_path"
+    status="missing"
+    if [[ -L "$link_path" ]]; then
+      link_target="$(readlink "$link_path")"
+      if is_managed_target "$link_target" "$repo_id"; then
+        managed_link_count=$((managed_link_count + 1))
+        if [[ -e "$link_target" ]]; then
+          status="managed"
+        else
+          status="managed-broken"
+          doctor_add_issue "broken managed symlink: $rel_path -> $link_target"
+        fi
+      else
+        status="foreign-symlink"
+        doctor_add_issue "foreign symlink blocks V5 attachment: $rel_path -> $link_target"
+      fi
+    elif [[ -e "$link_path" ]]; then
+      status="repo-owned"
+      doctor_add_issue "repo-owned path blocks V5 attachment: $rel_path"
+    fi
+    printf '%s=%s\n' "${rel_path//\//_}_status" "$status"
+  done
+
+  if [[ "$managed_link_count" -gt 0 && "$managed_link_count" -lt 4 ]]; then
+    doctor_add_issue "partial managed attachment surface: found $managed_link_count of 4 required managed links"
+  fi
+
+  if [[ -n "$attached_state_root" ]]; then
+    if [[ ! -f "$attached_state_root/metadata.json" ]]; then
+      doctor_add_issue "attached worktree is missing metadata: $attached_state_root/metadata.json"
+    else
+      if [[ "$(metadata_value "$attached_state_root/metadata.json" "repo_root")" != "$repo_root" ]]; then
+        doctor_add_issue "metadata repo_root mismatch for $attached_state_root/metadata.json"
+      fi
+      if [[ "$(metadata_value "$attached_state_root/metadata.json" "repo_id")" != "$repo_id" ]]; then
+        doctor_add_issue "metadata repo_id mismatch for $attached_state_root/metadata.json"
+      fi
+      if [[ "$(metadata_value "$attached_state_root/metadata.json" "worktree_id")" != "$(worktree_id_for "$repo_root")" ]]; then
+        doctor_add_issue "metadata worktree_id mismatch for $attached_state_root/metadata.json"
+      fi
+      if [[ "$(metadata_value "$attached_state_root/metadata.json" "common_git_dir")" != "$common_dir" ]]; then
+        doctor_add_issue "metadata common_git_dir mismatch for $attached_state_root/metadata.json"
+      fi
+      if [[ "$(metadata_value "$attached_state_root/metadata.json" "git_dir")" != "$git_dir" ]]; then
+        doctor_add_issue "metadata git_dir mismatch for $attached_state_root/metadata.json"
+      fi
+    fi
+
+    if [[ ! -f "$attached_state_root/AGENTS.md" ]]; then
+      doctor_add_issue "attached state is missing bootstrap file: $attached_state_root/AGENTS.md"
+    fi
+    if [[ ! -d "$attached_state_root/.project-memory" ]]; then
+      doctor_add_issue "attached state is missing project memory: $attached_state_root/.project-memory"
+    fi
+    if [[ ! -d "$attached_state_root/.automation" ]]; then
+      doctor_add_issue "attached state is missing automation surface: $attached_state_root/.automation"
+    fi
+    if [[ ! -d "$attached_state_root/.claude" ]]; then
+      doctor_add_issue "attached state is missing agents surface: $attached_state_root/.claude"
+    fi
+    if ! has_exclude_block "$worktree_exclude"; then
+      doctor_add_issue "attached worktree is missing the managed exclude block: $worktree_exclude"
+    fi
+    if ! has_exclude_block "$common_exclude"; then
+      doctor_add_issue "attached repo is missing the shared exclude block: $common_exclude"
+    fi
+  else
+    if has_exclude_block "$worktree_exclude"; then
+      doctor_add_issue "detached worktree still has a managed exclude block: $worktree_exclude"
+    fi
+    if [[ "$managed_link_count" -gt 0 ]]; then
+      doctor_add_issue "managed links exist but no attached state root could be resolved"
+    fi
+  fi
+
+  if [[ -z "$attached_state_root" ]]; then
+    if metadata_exists_for_repo "$repo_root"; then
+      printf 'detached_state_root=%s\n' "$candidate_state_root"
+    fi
+  fi
+
+  doctor_print
+}
+
+doctor_home_surface() {
+  local attached_count=0
+  local stale_count=0
+  local metadata
+
+  doctor_reset
+
+  printf 'doctor_scope=home\n'
+  printf 'memory_core_home=%s\n' "$MEMORY_CORE_HOME"
+  printf 'core_root=%s\n' "$CORE_ROOT"
+  printf 'projects_root=%s\n' "$PROJECTS_ROOT"
+
+  if [[ ! -d "$CORE_ROOT" ]]; then
+    doctor_add_issue "missing core root: $CORE_ROOT"
+  fi
+  if [[ ! -d "$CORE_ROOT/.project-memory" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.project-memory"
+  fi
+  if [[ ! -d "$CORE_ROOT/.automation" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.automation"
+  fi
+  if [[ ! -d "$CORE_ROOT/.claude" ]]; then
+    doctor_add_issue "missing core asset: $CORE_ROOT/.claude"
+  fi
+  if [[ ! -f "$CORE_ROOT/.claude/agents/aira-controller.md" ]]; then
+    doctor_add_issue "missing controller agent: $CORE_ROOT/.claude/agents/aira-controller.md"
+  fi
+  if [[ ! -f "$CORE_ROOT/.automation/scripts/aira-memory" ]]; then
+    doctor_add_issue "missing operator CLI: $CORE_ROOT/.automation/scripts/aira-memory"
+  fi
+
+  mkdir -p "$PROJECTS_ROOT"
+  while IFS= read -r metadata; do
+    if metadata_is_attached "$metadata"; then
+      attached_count=$((attached_count + 1))
+    else
+      stale_count=$((stale_count + 1))
+    fi
+  done < <(find "$PROJECTS_ROOT" -path '*/worktrees/*/metadata.json' -type f 2>/dev/null | sort)
+
+  printf 'attached_worktrees=%s\n' "$attached_count"
+  printf 'stale_state_dirs=%s\n' "$stale_count"
+
+  doctor_print
 }
 
 preflight_attach() {
@@ -628,6 +856,20 @@ EOF
   fi
 }
 
+doctor_known() {
+  if [[ $# -eq 0 ]]; then
+    doctor_home_surface
+    return
+  fi
+
+  if [[ "${1:-}" != "--repo" || $# -lt 2 ]]; then
+    echo "doctor accepts no arguments or --repo <path>" >&2
+    exit 1
+  fi
+
+  doctor_repo_surface "$(git_top "$2")"
+}
+
 prune_known() {
   local apply_mode="${1:-false}"
   mkdir -p "$PROJECTS_ROOT"
@@ -692,6 +934,9 @@ case "$command" in
       exit 1
     fi
     status_repo "$2"
+    ;;
+  doctor)
+    doctor_known "$@"
     ;;
   list)
     list_known

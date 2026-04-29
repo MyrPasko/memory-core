@@ -33,6 +33,7 @@ V5 exists for a different workflow:
 - each worktree gets isolated active state and workspace artifacts
 - shared scripts, agents, templates, and retrieval rules are installed once
 - the same `./.automation/scripts/aira-memory` workflow still works after attach
+- `memory-core-user doctor` validates the user-level install and `doctor --repo <path>` checks for broken symlinks, missing metadata, missing core assets, and half-detached worktrees
 - reattach preserves curated project memory and verification commands instead of reseeding them
 - if a repo already has tracked `AGENTS.md`, `/.project-memory`, `/.automation`, or `/.claude`, attach is a hard conflict and should fail before mounting anything
 - detach removes the managed symlinks and also removes the managed git-exclude block when no other attached worktree still depends on it

@@ -119,6 +119,8 @@ Then use the same repo-local workflow from inside that attached worktree:
 Useful management commands:
 
 ```sh
+memory-core-user doctor
+memory-core-user doctor --repo /absolute/path/to/worktree
 memory-core-user status --repo /absolute/path/to/worktree
 memory-core-user list
 memory-core-user detach --repo /absolute/path/to/worktree
@@ -126,6 +128,8 @@ memory-core-user prune
 memory-core-user prune --apply
 ```
 
+`memory-core-user doctor` validates the user-level install itself.
+`memory-core-user doctor --repo ...` diagnoses broken symlinks, missing metadata, missing core assets, and half-detached worktrees.
 `memory-core-user list` reports only currently attached worktrees.
 `memory-core-user prune` shows stale detached state directories; `--apply` removes them.
 
@@ -148,6 +152,7 @@ Use V5 when:
 
 ```sh
 ./scripts/package-memory-core.sh --bundle-name memory-core.0.5
+./scripts/smoke-v5-user-level.sh
 ```
 
 The command writes:
