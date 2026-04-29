@@ -247,9 +247,57 @@ MERGE_REPO="$TMP_DIR/merge-repo"
 mkdir -p "$MERGE_REPO/.claude/agents" "$MERGE_REPO/.claude/skills"
 git -C "$MERGE_REPO" init -b main >/dev/null
 printf 'merge\n' > "$MERGE_REPO/README.md"
-printf 'custom-agent\n' > "$MERGE_REPO/.claude/agents/custom-agent.md"
-printf 'custom-skill\n' > "$MERGE_REPO/.claude/skills/custom-skill.md"
-git -C "$MERGE_REPO" add README.md .claude/agents/custom-agent.md .claude/skills/custom-skill.md
+cat <<'EOF' > "$MERGE_REPO/.claude/agents/custom-agent.md"
+---
+name: custom-agent
+description: Repo-owned billing specialist for domain implementation work.
+---
+
+# Custom Agent
+
+## Role
+Billing migration specialist
+
+## Objective
+Help with repository-specific billing domain tasks.
+EOF
+cat <<'EOF' > "$MERGE_REPO/.claude/agents/aira-domain-helper.md"
+---
+name: aira-domain-helper
+description: Repo-owned Aira-prefixed helper for billing migration work.
+---
+
+# Aira Domain Helper
+
+## Role
+Billing migration specialist
+
+## Objective
+Assist with repository-specific billing migrations.
+EOF
+cat <<'EOF' > "$MERGE_REPO/.claude/agents/workflow-router.md"
+---
+name: workflow-router
+description: Controller-like router for legacy workflow handoffs.
+---
+
+# Workflow Router
+
+## Role
+Controller for workflow handoffs
+
+## Objective
+Route implementation work across legacy workflow surfaces.
+EOF
+cat <<'EOF' > "$MERGE_REPO/.claude/skills/custom-skill.md"
+---
+name: custom-skill
+description: Build and install helper for repository setup.
+---
+
+This skill automates build and install steps for repository setup.
+EOF
+git -C "$MERGE_REPO" add README.md .claude/agents/custom-agent.md .claude/agents/aira-domain-helper.md .claude/agents/workflow-router.md .claude/skills/custom-skill.md
 git -C "$MERGE_REPO" -c user.name=Aira -c user.email=aira@example.com commit -m init >/dev/null
 "$SRC_LAUNCHER" attach --repo "$MERGE_REPO" --claude-mode merge >/dev/null
 MERGE_STATUS="$("$SRC_LAUNCHER" status --repo "$MERGE_REPO")"
@@ -268,6 +316,23 @@ if [[ ! -L "$MERGE_REPO/.claude/agents/aira-controller.md" ]]; then
   echo "Merge mode should install managed Aira agent symlinks under .claude/agents" >&2
   exit 1
 fi
+INTEGRATION_OUTPUT="$(cd "$MERGE_REPO" && ./.automation/scripts/integrate-agent-surface)"
+assert_contains "$INTEGRATION_OUTPUT" "\"routing_contract\""
+if [[ ! -f "$MERGE_REPO/.project-memory/integrations/agent-routing/routing-contract.md" ]]; then
+  echo "Integration script should generate a routing contract for repo-owned Claude surfaces" >&2
+  exit 1
+fi
+if [[ ! -f "$MERGE_REPO/.project-memory/integrations/agent-routing/existing-skills.md" ]]; then
+  echo "Integration script should generate a skill inventory for repo-owned Claude surfaces" >&2
+  exit 1
+fi
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/existing-agents.md")" "custom-agent"
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/existing-agents.md")" "aira-domain-helper"
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/existing-skills.md")" "custom-skill"
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/routing-contract.md")" '`aira-domain-helper`: `domain-specialist`.'
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/routing-contract.md")" '`workflow-router`: `governance-collision-risk`.'
+assert_contains "$(cat "$MERGE_REPO/.project-memory/integrations/agent-routing/routing-contract.md")" '`custom-skill`: `deterministic-tool-skill`.'
+assert_contains "$(cat "$MERGE_REPO/.claude/agents/aira-controller.md")" 'run `./.automation/scripts/integrate-agent-surface` before planning or delegation'
 "$SRC_LAUNCHER" detach --repo "$MERGE_REPO" >/dev/null
 if [[ ! -f "$MERGE_REPO/.claude/agents/custom-agent.md" ]]; then
   echo "Detach should not remove repo-owned Claude agents" >&2

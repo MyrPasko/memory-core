@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Surface Integration"
+  short_description: "Rewrite repo agents and skills into routing artifacts"
+  default_prompt: "Use $agent-surface-integration-skill to rewrite the existing repo-owned Claude agents and skills into textual integration artifacts and a routing contract for Aira."

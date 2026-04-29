@@ -35,6 +35,7 @@ V5 exists for a different workflow:
 - shared scripts, agents, templates, and retrieval rules are installed once
 - the same `./.automation/scripts/aira-memory` workflow still works after attach
 - `memory-core-user doctor` validates the user-level install and `doctor --repo <path>` checks for broken symlinks, missing metadata, missing core assets, and half-detached worktrees
+- when a repo already has meaningful repo-owned Claude agents or skills, `./.automation/scripts/integrate-agent-surface` rewrites them into textual routing artifacts for Aira under `/.project-memory/integrations/agent-routing/`; treat that generated contract as required before Aira planning or delegation
 - reattach preserves curated project memory and verification commands instead of reseeding them
 - if a repo already has tracked `AGENTS.md`, `/.project-memory`, or `/.automation`, attach is a hard conflict and should fail before mounting anything
 - if a repo already owns `/.claude`, default attach is a hard conflict; use `--claude-mode merge` to preserve repo-owned `.claude` content and add only managed Aira agent symlinks under `/.claude/agents/`

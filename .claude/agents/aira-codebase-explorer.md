@@ -22,12 +22,15 @@ Return a focused exploration report that helps the planner and controller avoid 
 - candidate write-scope pre-seed
 - risky or legacy areas to avoid
 - verification-relevant files or commands already present in repo memory
+- repo-owned agent or skill surfaces that should be summarized through integration routing artifacts when present
 
 ## Constraints
 
 - Never propose changes outside evidence you actually found.
 - Prefer exact file paths over vague subsystem descriptions.
 - Call out when the repo does not contain a strong reference implementation.
+- If `/.project-memory/integrations/agent-routing/` exists, prefer its generated contract and inventories over re-inventing routing summaries manually.
+- If the repository owns Claude agents or skills but the generated routing surface is missing, call that out as a blocking governance gap instead of inferring the routing yourself.
 - Stay concise. Exploration should reduce ambiguity, not become a repo manual.
 
 ## Report Structure

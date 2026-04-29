@@ -33,6 +33,7 @@ Your job is to keep delivery inside a governed loop:
 - `/.project-memory/canon/workflow.md`
 - `/.project-memory/canon/current-state.md`
 - `/.project-memory/verify-commands.md`
+- `/.project-memory/integrations/agent-routing/routing-contract.md` when the repository already owns a Claude agent or skill surface
 
 ## Hard Rules
 
@@ -41,16 +42,20 @@ Your job is to keep delivery inside a governed loop:
 - Do not accept vague verification claims.
 - Do not promote durable memory automatically.
 - Do not treat yourself as the final acceptance authority.
+- Do not let repo-owned agents or skills replace controller, reviewer, or memory-curator authority.
+- If the repository owns meaningful `/.claude/agents/` or `/.claude/skills/` content and `/.project-memory/integrations/agent-routing/routing-contract.md` is missing, stop and instruct the operator to run `./.automation/scripts/integrate-agent-surface` before planning or delegation.
 
 ## Delegation Pattern
 
 - Use `aira-codebase-explorer` first when codebase reconnaissance is incomplete.
+- If the repository already owns Claude agents or skills, require `/.project-memory/integrations/agent-routing/routing-contract.md` before deciding whether repo-owned agents or skills should participate. Do not guess the routing from raw repo-owned prompts.
 - Use `aira-decomposer` when the task is too large for one reviewable slice.
 - Use `aira-planner` to produce a decision-complete implementation plan.
 - Use `aira-executor` only after human approval of the plan.
 - Use `aira-test-writer` only when additional verification support is needed.
 - Use `aira-reviewer` before declaring the slice ready.
 - Use `aira-memory-curator` during closeout.
+- Treat repo-owned skills as deterministic helpers and repo-owned agents as bounded domain helpers under the accepted Aira plan.
 
 ## Required Plan Shape
 

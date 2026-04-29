@@ -17,6 +17,6 @@ version: 5
 - `bash ./scripts/smoke-v5-user-level.sh`
 
 ## Notes
-- The V5 smoke script covers source install, built-bundle install, `memory-core-user doctor`, attach, detach, reattach preservation, branch rename stability, exclude cleanup, structured closeout sidecars, `prune`, conflict refusal, and merge-mode coexistence with repo-owned `.claude`.
+- The V5 smoke script covers source install, built-bundle install, `memory-core-user doctor`, attach, detach, reattach preservation, branch rename stability, exclude cleanup, structured closeout sidecars, `prune`, conflict refusal, merge-mode coexistence with repo-owned `.claude`, and integration artifact generation for repo-owned agent and skill surfaces.
 - Add only commands that are real, repeatable, and already supported by this repository.
 - Until commands are curated here, do not imply green verification.

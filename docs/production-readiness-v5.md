@@ -10,6 +10,7 @@
 - Multi-worktree attachment under one git common dir is supported and smoke-tested.
 - `memory-core-user doctor` diagnoses missing core assets, broken managed links, metadata drift, and half-detached repos.
 - A disposable regression script now covers source install, bundle install, doctor, multi-worktree attach, branch rename stability, structured closeout, prune, conflict refusal, and merge-mode coexistence with repo-owned `.claude`.
+- A deterministic integration script now rewrites repo-owned Claude agents and skills into compact routing artifacts for Aira.
 
 ## Must Fix Before Production
 
@@ -33,3 +34,8 @@
 
 - Add `attach --claude-mode merge` so user-level V5 can coexist with an existing repo-owned `/.claude` directory.
 - Track and detach only managed Aira agent entries in merge mode instead of replacing the entire repo-owned `/.claude` surface.
+
+## Completed Routing Integration Slice
+
+- Add `./.automation/scripts/integrate-agent-surface` to rewrite repo-owned Claude agents and skills into textual integration artifacts for Aira.
+- Add an installable integration skill plus Aira agent prompt hooks that require the generated routing contract before repo-owned surfaces participate in Aira planning or delegation.

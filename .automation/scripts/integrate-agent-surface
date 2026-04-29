@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from memory_v3 import parse_frontmatter, write_json, write_text  # noqa: E402
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Rewrite an existing repo-owned Claude agent and skill surface into textual integration artifacts for Aira agents."
+    )
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--claude-dir", default=".claude")
+    parser.add_argument("--skill-dir", action="append", default=[])
+    parser.add_argument("--output-dir", default=".project-memory/integrations/agent-routing")
+    return parser.parse_args()
+
+
+def resolve_repo_path(repo_root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return path.resolve()
+
+
+def normalize_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def first_nonempty_paragraph(text: str) -> str:
+    blocks = [block.strip() for block in text.split("\n\n")]
+    for block in blocks:
+        if not block:
+            continue
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines or lines[0].startswith("#"):
+            continue
+        return normalize_line(" ".join(lines))
+    return ""
+
+
+def extract_section(body: str, heading: str) -> str:
+    pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(.*?)(?=^##\s+|\Z)")
+    match = pattern.search(body)
+    if not match:
+        return ""
+    return normalize_line(match.group(1))
+
+
+def read_markdown_surface(path: Path) -> tuple[dict, str]:
+    metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    return metadata, body
+
+
+def classify_agent(name: str, description: str, role: str, objective: str) -> tuple[str, str, str]:
+    text = " ".join([name, description, role, objective]).lower()
+    if any(token in text for token in ["controller", "orchestrator", "router", "planner", "reviewer", "executor"]):
+        return (
+            "governance-collision-risk",
+            "Use only as a bounded domain helper or reference surface.",
+            "Do not let this surface replace Aira controller, reviewer, or memory authority.",
+        )
+    if any(token in text for token in ["test", "qa", "verify", "validation"]):
+        return (
+            "verification-helper",
+            "Use as a sidecar verification or quality helper after the Aira plan is fixed.",
+            "Do not treat this surface as the final acceptance authority.",
+        )
+    if any(token in text for token in ["explore", "research", "analysis", "docs"]):
+        return (
+            "reference-specialist",
+            "Use during reconnaissance when the task matches this domain.",
+            "Do not delegate plan acceptance or scope control to this surface.",
+        )
+    return (
+        "domain-specialist",
+        "Use for bounded implementation or domain guidance when the task closely matches the described specialty.",
+        "Do not let this surface override repo canon, verification gates, or closeout ownership.",
+    )
+
+
+def classify_skill(name: str, description: str, workflow: str) -> tuple[str, str, str]:
+    text = " ".join([name, description, workflow]).lower()
+    if any(token in text for token in ["audit", "review", "closeout", "promote"]):
+        return (
+            "governed-support-skill",
+            "Use as a deterministic helper after the controller decides the task belongs in this lane.",
+            "Do not let this skill redefine acceptance or promotion authority.",
+        )
+    if any(token in text for token in ["build", "generate", "bundle", "install", "script"]):
+        return (
+            "deterministic-tool-skill",
+            "Use first when the subtask is procedural and command-driven.",
+            "Do not widen a product slice just because the skill can automate adjacent work.",
+        )
+    return (
+        "domain-skill",
+        "Use when the subtask directly matches the described workflow or domain specialization.",
+        "Do not let this skill override repo canon or controller-owned decisions.",
+    )
+
+
+def format_bullets(items: list[str], empty: str) -> str:
+    if not items:
+        return empty
+    return "\n".join(f"- {item}" for item in items)
+
+
+def relative_if_possible(path: Path, repo_root: Path) -> str:
+    try:
+        return str(path.relative_to(repo_root))
+    except ValueError:
+        return str(path)
+
+
+def gather_agents(claude_agents_dir: Path, repo_root: Path) -> dict[str, list[dict]]:
+    managed: list[dict] = []
+    repo_owned: list[dict] = []
+    if not claude_agents_dir.exists():
+        return {"managed": managed, "repo_owned": repo_owned}
+
+    for path in sorted(claude_agents_dir.glob("*.md")):
+        metadata, body = read_markdown_surface(path)
+        name = str(metadata.get("name") or path.stem).strip()
+        description = str(metadata.get("description") or "").strip()
+        role = extract_section(body, "Role")
+        objective = extract_section(body, "Objective")
+        summary = first_nonempty_paragraph(body)
+        route_class, when_to_use, avoid_for = classify_agent(name, description, role, objective)
+        entry = {
+            "name": name,
+            "path": str(path.resolve()),
+            "relative_path": relative_if_possible(path.resolve(), repo_root),
+            "description": description,
+            "role": role,
+            "objective": objective,
+            "summary": summary,
+            "route_class": route_class,
+            "when_to_use": when_to_use,
+            "avoid_for": avoid_for,
+            "is_symlink": path.is_symlink(),
+            "symlink_target": os.readlink(path) if path.is_symlink() else "",
+        }
+        # In merge mode, Memory Core installs managed Aira agents as symlinks.
+        # Repo-owned files may legitimately use an `aira-*` naming convention,
+        # so name-based ownership inference is not safe here.
+        if path.is_symlink():
+            managed.append(entry)
+        else:
+            repo_owned.append(entry)
+    return {"managed": managed, "repo_owned": repo_owned}
+
+
+def gather_skills(skill_roots: list[Path], repo_root: Path) -> list[dict]:
+    seen: set[Path] = set()
+    items: list[dict] = []
+    for root in skill_roots:
+        if not root.exists():
+            continue
+        candidate_paths = list(root.rglob("SKILL.md")) + [
+            path for path in root.glob("*.md") if path.name != "SKILL.md"
+        ]
+        for path in sorted(candidate_paths):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            metadata, body = read_markdown_surface(path)
+            name = str(metadata.get("name") or path.parent.name).strip()
+            description = str(metadata.get("description") or "").strip()
+            workflow = first_nonempty_paragraph(body)
+            route_class, when_to_use, avoid_for = classify_skill(name, description, workflow)
+            items.append(
+                {
+                    "name": name,
+                    "path": str(resolved),
+                    "relative_path": relative_if_possible(resolved, repo_root),
+                    "description": description,
+                    "workflow": workflow,
+                    "route_class": route_class,
+                    "when_to_use": when_to_use,
+                    "avoid_for": avoid_for,
+                }
+            )
+    return items
+
+
+def render_agents_md(repo_owned_agents: list[dict], managed_agents: list[dict]) -> str:
+    lines = [
+        "# Existing Repo Agents",
+        "",
+        "This file rewrites the repo-owned Claude agent surface into a compact text inventory that Aira agents can load safely.",
+        "",
+        f"- Repo-owned agent count: `{len(repo_owned_agents)}`",
+        f"- Managed Aira agent count: `{len(managed_agents)}`",
+        "",
+        "## Managed Aira Agents",
+    ]
+    if managed_agents:
+        for agent in managed_agents:
+            lines.append(f"- `{agent['name']}` -> `{agent['relative_path']}`")
+    else:
+        lines.append("- None detected.")
+
+    lines.extend(["", "## Repo-Owned Agents"])
+    if not repo_owned_agents:
+        lines.append("- None detected.")
+        return "\n".join(lines)
+
+    for agent in repo_owned_agents:
+        lines.extend(
+            [
+                "",
+                f"### {agent['name']}",
+                f"- Path: `{agent['relative_path']}`",
+                f"- Description: {agent['description'] or 'No description provided.'}",
+                f"- Role: {agent['role'] or 'Not explicitly stated.'}",
+                f"- Objective: {agent['objective'] or 'Not explicitly stated.'}",
+                f"- Summary: {agent['summary'] or 'No summary extracted.'}",
+                f"- Suggested route class: `{agent['route_class']}`",
+                f"- When to use: {agent['when_to_use']}",
+                f"- Avoid for: {agent['avoid_for']}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def render_skills_md(skills: list[dict]) -> str:
+    lines = [
+        "# Existing Repo Skills",
+        "",
+        "This file rewrites the repo-owned skill surface into a compact text inventory for Aira agents.",
+        "",
+        f"- Repo-owned skill count: `{len(skills)}`",
+        "",
+        "## Repo-Owned Skills",
+    ]
+    if not skills:
+        lines.append("- None detected.")
+        return "\n".join(lines)
+
+    for skill in skills:
+        lines.extend(
+            [
+                "",
+                f"### {skill['name']}",
+                f"- Path: `{skill['relative_path']}`",
+                f"- Description: {skill['description'] or 'No description provided.'}",
+                f"- Workflow summary: {skill['workflow'] or 'No workflow summary extracted.'}",
+                f"- Suggested route class: `{skill['route_class']}`",
+                f"- When to use: {skill['when_to_use']}",
+                f"- Avoid for: {skill['avoid_for']}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def render_routing_contract(repo_owned_agents: list[dict], skills: list[dict]) -> str:
+    agent_rows = [
+        f"`{agent['name']}`: `{agent['route_class']}`. {agent['when_to_use']} {agent['avoid_for']}"
+        for agent in repo_owned_agents
+    ]
+    skill_rows = [
+        f"`{skill['name']}`: `{skill['route_class']}`. {skill['when_to_use']} {skill['avoid_for']}"
+        for skill in skills
+    ]
+    return "\n".join(
+        [
+            "# Agent Routing Contract",
+            "",
+            "Use this contract when Aira agents need to coexist with repo-owned Claude agents or repo-owned skills.",
+            "",
+            "## Authority Boundaries",
+            "- Repo canon still wins over any repo-owned agent or skill instructions when they disagree.",
+            "- `aira-controller` remains the orchestration authority for scope, plan acceptance, verification judgment, canon updates, and closeout acceptance.",
+            "- `aira-reviewer` remains the governed review surface for correctness, scope leakage, and verification confidence.",
+            "- `aira-memory-curator` remains the closeout and promotion-preparation surface.",
+            "",
+            "## Routing Order",
+            "1. Governance and memory tasks route to Aira controller, reviewer, or memory roles first.",
+            "2. Deterministic workflow or tooling subtasks route to repo-owned skills before free-form delegation.",
+            "3. Domain-specific implementation or analysis subtasks may route to repo-owned agents, but only as bounded helpers under an accepted Aira plan.",
+            "4. When a repo-owned surface looks like a controller, planner, reviewer, or executor, treat it as a collision-risk helper rather than a replacement governance role unless a human explicitly overrides that rule.",
+            "5. If routing is ambiguous, fall back to Aira controller plus the generated inventories instead of guessing.",
+            "",
+            "## Repo-Owned Agent Routes",
+            format_bullets(agent_rows, "- None detected."),
+            "",
+            "## Repo-Owned Skill Routes",
+            format_bullets(skill_rows, "- None detected."),
+        ]
+    )
+
+
+def render_integration_brief(repo_root: Path, output_dir: Path, inventory: dict) -> str:
+    return "\n".join(
+        [
+            "# Agent Surface Integration Brief",
+            "",
+            f"- Repo root: `{repo_root}`",
+            f"- Output dir: `{output_dir}`",
+            f"- Repo-owned agent count: `{len(inventory['repo_owned_agents'])}`",
+            f"- Repo-owned skill count: `{len(inventory['repo_owned_skills'])}`",
+            f"- Managed Aira agent count: `{len(inventory['managed_aira_agents'])}`",
+            "",
+            "## Use This Surface",
+            "1. Run `./.automation/scripts/integrate-agent-surface` after attaching a repo that already owns `.claude`.",
+            "2. Review `routing-contract.md` first.",
+            "3. Let Aira controller keep governance while repo-owned agents and skills act as bounded helpers.",
+            "4. Re-run the script after adding, removing, or materially changing repo-owned agents or skills.",
+        ]
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = Path(args.repo_root).resolve()
+    claude_dir = resolve_repo_path(repo_root, args.claude_dir)
+    output_dir = resolve_repo_path(repo_root, args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    skill_roots = [claude_dir / "skills"]
+    for value in args.skill_dir:
+        skill_roots.append(resolve_repo_path(repo_root, value))
+
+    gathered_agents = gather_agents(claude_dir / "agents", repo_root)
+    gathered_skills = gather_skills(skill_roots, repo_root)
+
+    inventory = {
+        "repo_root": str(repo_root),
+        "claude_dir": str(claude_dir),
+        "skill_roots": [str(path) for path in skill_roots],
+        "managed_aira_agents": gathered_agents["managed"],
+        "repo_owned_agents": gathered_agents["repo_owned"],
+        "repo_owned_skills": gathered_skills,
+    }
+
+    existing_agents_path = output_dir / "existing-agents.md"
+    existing_skills_path = output_dir / "existing-skills.md"
+    routing_contract_path = output_dir / "routing-contract.md"
+    integration_brief_path = output_dir / "integration-brief.md"
+    inventory_path = output_dir / "inventory.json"
+
+    write_text(existing_agents_path, render_agents_md(gathered_agents["repo_owned"], gathered_agents["managed"]))
+    write_text(existing_skills_path, render_skills_md(gathered_skills))
+    write_text(routing_contract_path, render_routing_contract(gathered_agents["repo_owned"], gathered_skills))
+    write_text(integration_brief_path, render_integration_brief(repo_root, output_dir, inventory))
+    write_json(inventory_path, inventory)
+
+    print(
+        json.dumps(
+            {
+                "inventory": str(inventory_path),
+                "routing_contract": str(routing_contract_path),
+                "existing_agents": str(existing_agents_path),
+                "existing_skills": str(existing_skills_path),
+                "integration_brief": str(integration_brief_path),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

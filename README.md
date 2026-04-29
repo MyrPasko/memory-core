@@ -35,6 +35,7 @@ That authority model is encoded in:
 - `/.automation/scripts/` for retrieval, extraction, promotion, audit, hub rebuild, and closeout
 - `/.claude/agents/` with Aira user agents for controller, planner, executor, reviewer, and memory roles
 - optional adapter assets for Codex/OpenAI skills and Obsidian sync
+- optional integration skill for rewriting repo-owned Claude surfaces into Aira routing artifacts
 
 ### Install
 
@@ -140,6 +141,22 @@ memory-core-user prune --apply
 
 Use `--claude-mode merge` when the repository already owns a real `/.claude` directory with existing agents, rules, or skills that must stay in place.
 In merge mode, Memory Core preserves repo-owned `/.claude` content and adds only managed Aira agent symlinks under `/.claude/agents/`.
+
+If the repository already has meaningful repo-owned Claude agents or skills, generate the deterministic integration layer for Aira before using them together:
+
+```sh
+./.automation/scripts/integrate-agent-surface
+```
+
+That command rewrites the repo-owned agent and skill surface into compact text artifacts under `/.project-memory/integrations/agent-routing/`:
+
+- `integration-brief.md`
+- `routing-contract.md`
+- `existing-agents.md`
+- `existing-skills.md`
+- `inventory.json`
+
+The routing contract keeps Aira controller, reviewer, and memory roles as governance authorities while letting repo-owned skills act as deterministic helpers and repo-owned agents act as bounded domain helpers. When repo-owned Claude surfaces exist, treat this contract as required before planning or delegation through Aira.
 
 Attach is intentionally conservative:
 

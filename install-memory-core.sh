@@ -311,6 +311,7 @@ if [[ "$SYNC_GLOBAL_SKILLS" == "true" ]]; then
   copy_tree "$PAYLOAD_DIR/.automation/memory-v3/skills/memory-promote-skill" "$HOME/.codex/skills/memory-promote-skill"
   copy_tree "$PAYLOAD_DIR/.automation/memory-v3/skills/memory-audit-skill" "$HOME/.codex/skills/memory-audit-skill"
   copy_tree "$PAYLOAD_DIR/.automation/memory-v3/skills/memory-operator-skill" "$HOME/.codex/skills/memory-operator-skill"
+  copy_tree "$PAYLOAD_DIR/.automation/memory-v3/skills/agent-surface-integration-skill" "$HOME/.codex/skills/agent-surface-integration-skill"
 fi
 
 if [[ "$SYNC_OBSIDIAN" == "true" ]]; then

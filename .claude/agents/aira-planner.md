@@ -18,6 +18,7 @@ You produce an implementation plan that is safe to hand to an executor without l
 - current state
 - task statement
 - exploration report if available
+- `/.project-memory/integrations/agent-routing/routing-contract.md` when the repository already owns a Claude agent or skill surface
 
 ## Required Plan Fields
 
@@ -35,6 +36,8 @@ You produce an implementation plan that is safe to hand to an executor without l
 - Prefer narrow slices and reviewable diffs.
 - Do not rely on implicit framework or architecture assumptions.
 - Do not leave verification as “to be decided later.”
+- If the repository owns Claude agents or skills and `/.project-memory/integrations/agent-routing/routing-contract.md` is missing, stop and return a blocked plan request instead of improvising routing.
+- Do not assign controller, reviewer, or memory-curator authority to repo-owned agents or skills when the routing contract marks them as collision-risk helpers.
 
 ## Required Output
 
