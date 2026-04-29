@@ -712,6 +712,129 @@ def extract_forbidden_moves(text: str) -> list[str]:
     return deduped
 
 
+def normalize_string_list(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(item) for item in raw]
+    else:
+        values = [str(raw)]
+    items = []
+    seen = set()
+    for value in values:
+        normalized = value.strip().strip("`")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            items.append(normalized)
+    return items
+
+
+def default_verification_checks() -> dict:
+    return {
+        "build": "unknown",
+        "typecheck": "unknown",
+        "lint": "unknown",
+        "tests": "unknown",
+        "manual": "unknown",
+        "browser": "unknown",
+        "overall": "unknown",
+        "evidence": [],
+    }
+
+
+def normalize_verification_status(value) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"pass", "fail", "blocked", "not-run", "unknown"}:
+        return normalized
+    return "unknown"
+
+
+def finalize_verification(checks: dict) -> dict:
+    if checks["overall"] == "unknown":
+        values = [value for key, value in checks.items() if key not in {"overall", "evidence"}]
+        if any(value == "fail" for value in values):
+            checks["overall"] = "fail"
+        elif any(value == "blocked" for value in values):
+            checks["overall"] = "blocked"
+        elif any(value == "pass" for value in values):
+            checks["overall"] = "pass"
+        elif any(value == "not-run" for value in values):
+            checks["overall"] = "not-run"
+    checks["evidence"] = normalize_string_list(checks.get("evidence"))[:8]
+    return checks
+
+
+def merge_verification(base: dict, override: dict) -> dict:
+    merged = default_verification_checks()
+    for key in merged:
+        if key == "evidence":
+            merged[key] = normalize_string_list(base.get("evidence")) + [
+                item for item in normalize_string_list(override.get("evidence")) if item not in normalize_string_list(base.get("evidence"))
+            ]
+            continue
+        merged[key] = str(base.get(key, "unknown")).strip() or "unknown"
+        override_value = normalize_verification_status(override.get(key))
+        if override_value != "unknown":
+            merged[key] = override_value
+    return finalize_verification(merged)
+
+
+def parse_structured_implement_result(path: Path) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Structured implement result must be a JSON object: {path}")
+
+    verification = default_verification_checks()
+    entries = payload.get("verification", [])
+    surface_aliases = {
+        "build": "build",
+        "typecheck": "typecheck",
+        "lint": "lint",
+        "test": "tests",
+        "tests": "tests",
+        "manual": "manual",
+        "browser": "browser",
+    }
+
+    if isinstance(entries, dict):
+        verification["overall"] = normalize_verification_status(entries.get("overall"))
+        verification["evidence"] = normalize_string_list(entries.get("evidence"))
+    elif isinstance(entries, list):
+        evidence = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            surface = surface_aliases.get(str(item.get("kind", "")).strip().lower(), "")
+            result = normalize_verification_status(item.get("result"))
+            command = str(item.get("command", "")).strip()
+            notes = str(item.get("notes", "")).strip()
+            if surface and result != "unknown":
+                verification[surface] = result
+            if command:
+                evidence.append(f"- command: {command}")
+            if result != "unknown":
+                evidence.append(f"- result: {result}")
+            if notes:
+                evidence.append(f"- notes: {notes}")
+        verification["evidence"] = evidence
+    else:
+        raise ValueError(f"Structured verification must be a JSON object or list: {path}")
+
+    verification = finalize_verification(verification)
+    return {
+        "task_id": str(payload.get("task_id", "")).strip(),
+        "task_type": str(payload.get("task_type", "")).strip(),
+        "branch": str(payload.get("branch", "")).strip(),
+        "write_scope": normalize_string_list(payload.get("write_scope")),
+        "forbidden_moves": normalize_string_list(payload.get("forbidden_moves")),
+        "open_findings": normalize_string_list(payload.get("open_findings")),
+        "review_closeout": normalize_string_list(payload.get("review_closeout")),
+        "verification": verification,
+    }
+
+
 def infer_current_branch(repo_root: Path) -> str:
     try:
         import subprocess
@@ -728,17 +851,11 @@ def infer_current_branch(repo_root: Path) -> str:
 
 def detect_verification(text: str) -> dict:
     lowered = text.lower()
-    checks = {
-        "build": "unknown",
-        "typecheck": "unknown",
-        "lint": "unknown",
-        "tests": "unknown",
-        "manual": "unknown",
-        "browser": "unknown",
-        "overall": "unknown",
-    }
+    checks = default_verification_checks()
     evidence = []
     for name in list(checks):
+        if name in {"overall", "evidence"}:
+            continue
         if f"{name}: pass" in lowered or f"{name} passes" in lowered or f"{name} passed" in lowered:
             checks[name] = "pass"
         elif f"{name}: fail" in lowered or f"{name} failed" in lowered:
@@ -775,15 +892,8 @@ def detect_verification(text: str) -> dict:
             checks["manual"] = "fail"
         elif "manual" in lowered_line and "blocked" in lowered_line:
             checks["manual"] = "blocked"
-    if checks["overall"] == "unknown":
-        if any(value == "fail" for key, value in checks.items() if key not in {"overall"}):
-            checks["overall"] = "fail"
-        elif any(value == "blocked" for key, value in checks.items() if key not in {"overall"}):
-            checks["overall"] = "blocked"
-        elif any(value == "pass" for key, value in checks.items() if key not in {"overall"}):
-            checks["overall"] = "pass"
-    checks["evidence"] = evidence[:8]
-    return checks
+    checks["evidence"] = evidence
+    return finalize_verification(checks)
 
 
 def maybe_quote(value: str) -> str:

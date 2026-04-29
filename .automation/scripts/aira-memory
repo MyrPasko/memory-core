@@ -36,8 +36,10 @@ Examples:
 Default behavior:
   - `finish` infers `--project` from `/.project-memory/canon/current-state.md` or the repo directory name
   - `finish` infers `--task-type` from the latest `prepare`/shortcut command
-  - `finish` defaults `--input` to `.automation/workspace/implement.result.md`,
-    then `.automation/workspace/fix.result.md` if present
+  - `finish` defaults `--input` to `.automation/workspace/implement.result.md`
+    and also includes `.automation/workspace/implement.result.json` when present
+  - if no implementation result exists, `finish` falls back to `fix.result.md`
+    and `fix.result.json` when present
 
 Notes:
   - `prepare` and the task shortcuts wrap `.automation/scripts/build-context-bundle`
@@ -110,13 +112,19 @@ prepend_project_if_missing() {
   printf '%s\n' "${args[@]}"
 }
 
-default_input_path() {
+default_input_paths() {
   if [[ -f "$ROOT_DIR/.automation/workspace/implement.result.md" ]]; then
     printf '%s\n' "$ROOT_DIR/.automation/workspace/implement.result.md"
+    if [[ -f "$ROOT_DIR/.automation/workspace/implement.result.json" ]]; then
+      printf '%s\n' "$ROOT_DIR/.automation/workspace/implement.result.json"
+    fi
     return 0
   fi
   if [[ -f "$ROOT_DIR/.automation/workspace/fix.result.md" ]]; then
     printf '%s\n' "$ROOT_DIR/.automation/workspace/fix.result.md"
+    if [[ -f "$ROOT_DIR/.automation/workspace/fix.result.json" ]]; then
+      printf '%s\n' "$ROOT_DIR/.automation/workspace/fix.result.json"
+    fi
     return 0
   fi
   return 1
@@ -191,11 +199,19 @@ run_finish() {
   fi
 
   if [[ "$has_input" == "false" ]]; then
-    local inferred_input=""
-    if inferred_input="$(default_input_path)"; then
-      args=(--input "$inferred_input" "${args[@]}")
+    local inferred_inputs=()
+    while IFS= read -r line; do
+      inferred_inputs+=("$line")
+    done < <(default_input_paths || true)
+    if [[ ${#inferred_inputs[@]} -gt 0 ]]; then
+      local rebuilt_args=("${args[@]}")
+      args=()
+      for inferred_input in "${inferred_inputs[@]}"; do
+        args+=(--input "$inferred_input")
+      done
+      args+=("${rebuilt_args[@]}")
     else
-      echo "finish requires --input when neither .automation/workspace/implement.result.md nor fix.result.md exists" >&2
+      echo "finish requires --input when neither implementation nor fix result artifacts exist" >&2
       exit 1
     fi
   fi

@@ -20,7 +20,10 @@ from memory_v3 import (  # noqa: E402
     extract_write_scope,
     infer_current_branch,
     markdown_list,
+    merge_verification,
     now_utc_date,
+    normalize_string_list,
+    parse_structured_implement_result,
     render_template,
     sanitize_filename,
     slugify,
@@ -72,21 +75,39 @@ def main() -> int:
     template_root = repo_root / ".project-memory/templates/obsidian"
 
     combined_parts = []
+    structured_inputs = []
     for input_path in args.input:
         path = Path(input_path).resolve()
+        if path.name in {"implement.result.json", "fix.result.json"}:
+            structured_inputs.append(parse_structured_implement_result(path))
+            continue
         combined_parts.append(path.read_text(encoding="utf-8"))
     combined_text = "\n\n".join(combined_parts)
+    structured = {
+        "branch": "",
+        "write_scope": [],
+        "forbidden_moves": [],
+        "open_findings": [],
+        "verification": {},
+    }
+    for item in structured_inputs:
+        if not structured["branch"] and item.get("branch"):
+            structured["branch"] = item["branch"]
+        structured["write_scope"] = normalize_string_list(structured["write_scope"] + item.get("write_scope", []))
+        structured["forbidden_moves"] = normalize_string_list(structured["forbidden_moves"] + item.get("forbidden_moves", []))
+        structured["open_findings"] = normalize_string_list(structured["open_findings"] + item.get("open_findings", []))
+        structured["verification"] = merge_verification(structured.get("verification", {}), item.get("verification", {}))
 
     summaries = summary_from_text(combined_text, limit=4)
-    verification = detect_verification(combined_text)
+    verification = merge_verification(detect_verification(combined_text), structured.get("verification", {}))
     decisions = extract_decisions(combined_text)
     failures = extract_issue_triplets(combined_text)
     patterns = extract_pattern_entries(combined_text)
-    write_scope = extract_write_scope(combined_text)
-    forbidden_moves = extract_forbidden_moves(combined_text)
-    open_findings = extract_open_findings(combined_text)
+    write_scope = normalize_string_list(extract_write_scope(combined_text) + structured.get("write_scope", []))
+    forbidden_moves = normalize_string_list(extract_forbidden_moves(combined_text) + structured.get("forbidden_moves", []))
+    open_findings = normalize_string_list(extract_open_findings(combined_text) + structured.get("open_findings", []))
     files_touched = changed_files(repo_root)
-    branch = args.branch or infer_current_branch(repo_root)
+    branch = args.branch or structured.get("branch") or infer_current_branch(repo_root)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     patterns_dir = output_dir / "patterns"

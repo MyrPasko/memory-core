@@ -1,0 +1,17 @@
+{
+  "task_id": "set-task-id",
+  "task_type": "feature",
+  "branch": "set-branch",
+  "write_scope": [],
+  "forbidden_moves": [],
+  "verification": [
+    {
+      "kind": "tests",
+      "command": "exact command",
+      "result": "pass",
+      "notes": "concrete evidence"
+    }
+  ],
+  "open_findings": [],
+  "review_closeout": []
+}

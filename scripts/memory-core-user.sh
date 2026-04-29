@@ -29,6 +29,7 @@ Commands:
   detach    Remove managed symlinks from a git repo or worktree
   status    Show the managed state for a repo or worktree
   list      List known attached repos and worktrees
+  prune     Remove stale detached state directories from the user-level registry
   help      Show this help
 
 Examples:
@@ -198,6 +199,16 @@ metadata_is_attached() {
   fi
   actual_state_root="$(managed_state_root_from_repo "$repo_root" || true)"
   [[ -n "$actual_state_root" && "$actual_state_root" == "$expected_state_root" ]]
+}
+
+cleanup_empty_registry_dirs() {
+  local state_root="$1"
+  local worktrees_dir
+  local repo_dir
+  worktrees_dir="$(dirname "$state_root")"
+  repo_dir="$(dirname "$worktrees_dir")"
+  rmdir "$worktrees_dir" 2>/dev/null || true
+  rmdir "$repo_dir" 2>/dev/null || true
 }
 
 ensure_exclude_block() {
@@ -617,6 +628,41 @@ EOF
   fi
 }
 
+prune_known() {
+  local apply_mode="${1:-false}"
+  mkdir -p "$PROJECTS_ROOT"
+  local found="false"
+  while IFS= read -r metadata; do
+    if metadata_is_attached "$metadata"; then
+      continue
+    fi
+    found="true"
+    local state_root
+    state_root="$(dirname "$metadata")"
+    cat <<EOF
+project_name=$(metadata_value "$metadata" "project_name")
+repo_root=$(metadata_value "$metadata" "repo_root")
+repo_id=$(metadata_value "$metadata" "repo_id")
+worktree_id=$(metadata_value "$metadata" "worktree_id")
+state_root=$state_root
+status=stale
+mode=$(if [[ "$apply_mode" == "true" ]]; then printf 'pruned'; else printf 'dry-run'; fi)
+
+EOF
+    if [[ "$apply_mode" == "true" ]]; then
+      rm -rf "$state_root"
+      cleanup_empty_registry_dirs "$state_root"
+    fi
+  done < <(find "$PROJECTS_ROOT" -path '*/worktrees/*/metadata.json' -type f | sort)
+  if [[ "$found" == "false" ]]; then
+    if [[ "$apply_mode" == "true" ]]; then
+      echo "No stale Memory Core V5 state directories."
+    else
+      echo "No stale Memory Core V5 state directories to prune."
+    fi
+  fi
+}
+
 if [[ $# -eq 0 ]]; then
   usage >&2
   exit 1
@@ -649,6 +695,16 @@ case "$command" in
     ;;
   list)
     list_known
+    ;;
+  prune)
+    if [[ "${1:-}" == "--apply" ]]; then
+      prune_known true
+    elif [[ $# -eq 0 ]]; then
+      prune_known false
+    else
+      echo "prune accepts no arguments or --apply" >&2
+      exit 1
+    fi
     ;;
   help|-h|--help)
     usage

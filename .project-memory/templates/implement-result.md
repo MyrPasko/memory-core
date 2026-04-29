@@ -13,6 +13,11 @@ slice_restrictions: []
 
 # Implementation Result
 
+## Structured Sidecar
+- If this slice matters, also fill `/.automation/workspace/implement.result.json`.
+- The JSON sidecar is the machine-readable contract for verification, write-scope, forbidden moves, and open findings.
+- This markdown file remains the human-readable companion, not the only source of closeout truth.
+
 ## Plan Summary
 - State the accepted slice in one or two sentences.
 

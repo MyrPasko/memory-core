@@ -26,5 +26,6 @@ kind: workflow
 ## Slice Completion
 - A slice is incomplete if verification is missing.
 - A slice is incomplete if `implement.result.md` is missing.
+- A slice is incomplete if the machine-readable closeout contract is required but `implement.result.json` is missing.
 - A slice is incomplete if review-closeout is missing when findings were raised.
 - A slice is incomplete if actual file changes escaped the accepted write-scope without explicit approval.

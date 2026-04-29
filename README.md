@@ -122,9 +122,12 @@ Useful management commands:
 memory-core-user status --repo /absolute/path/to/worktree
 memory-core-user list
 memory-core-user detach --repo /absolute/path/to/worktree
+memory-core-user prune
+memory-core-user prune --apply
 ```
 
 `memory-core-user list` reports only currently attached worktrees.
+`memory-core-user prune` shows stale detached state directories; `--apply` removes them.
 
 Attach is intentionally conservative:
 
@@ -193,9 +196,12 @@ For closeout:
 Review:
 
 - `/.automation/workspace/implement.result.md`
+- `/.automation/workspace/implement.result.json`
 - `/.automation/workspace/memory-candidates/task-001/promotion-review.md`
 
 Apply promotion only after explicit approval.
+
+For production-grade closeout, treat `implement.result.json` as the machine-readable contract for verification, write-scope, forbidden moves, and open findings. The markdown file remains the human-readable companion.
 
 ## Rules
 

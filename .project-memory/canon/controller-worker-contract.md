@@ -41,4 +41,5 @@ version: 4
 ## Preferred Artifacts
 - `/.automation/workspace/context-bundle.md`
 - `/.automation/workspace/implement.result.md`
+- `/.automation/workspace/implement.result.json`
 - `/.automation/workspace/memory-candidates/<task-id>/promotion-review.md`

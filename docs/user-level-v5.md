@@ -37,3 +37,4 @@ V5 exists for a different workflow:
 - if a repo already has tracked `AGENTS.md`, `/.project-memory`, `/.automation`, or `/.claude`, attach is a hard conflict and should fail before mounting anything
 - detach removes the managed symlinks and also removes the managed git-exclude block when no other attached worktree still depends on it
 - `memory-core-user list` reports only currently attached worktrees, not every historical state directory
+- `memory-core-user prune` reports stale detached state directories; `--apply` removes them
